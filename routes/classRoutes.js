@@ -96,17 +96,23 @@ router.post("/:className/marks", async (req, res) => {
       let total = 0;
       let fail = false;
 
-      // Ensure s.marks exists, recalculate logic matches entry.html
-      s.marks.forEach(val => {
-        const numVal = Number(val || 0);
-        total += numVal;
-        if (numVal < cls.passMark) fail = true;
+      const marks = s.marks || [];
+      marks.forEach((val, idx) => {
+        const strVal = String(val || "").toUpperCase();
+        if (strVal === "AB" || strVal === "A") {
+           fail = true;
+        } else {
+          const numVal = Number(strVal || 0);
+          total += (isNaN(numVal) ? 0 : numVal);
+          if (numVal < cls.passMark) fail = true;
+        }
       });
 
       const percentage = maxTotal > 0 ? (total / maxTotal) * 100 : 0;
 
       return {
         ...s,
+        marks: marks,
         total,
         percentage: Number(percentage.toFixed(2)),
         result: fail ? "Fail" : "Pass"
