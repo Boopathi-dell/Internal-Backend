@@ -15,7 +15,7 @@ router.get("/", async (req, res) => {
 // CREATE OR UPDATE A CLASS (Admin Panel Data Setup)
 router.post("/", async (req, res) => {
   try {
-    const { className, subjects, passMark, examName, markPerSubject, students, courseDetails, targetPassPercentage, date, department, yearSemSec, programme } = req.body;
+    const { className, subjects, passMark, examName, markPerSubject, students, courseDetails, targetPassPercentage, date, department, yearSemSec, programme, allowEditing } = req.body;
 
     let cls = await ClassData.findOne({ className });
     if (cls) {
@@ -30,6 +30,7 @@ router.post("/", async (req, res) => {
       if (department !== undefined) cls.department = department;
       if (yearSemSec !== undefined) cls.yearSemSec = yearSemSec;
       if (programme !== undefined) cls.programme = programme;
+      if (allowEditing !== undefined) cls.allowEditing = allowEditing;
       
       // Preserve existing marks for students that are kept, add new ones empty
       const updatedStudents = students.map(newStudent => {
@@ -62,7 +63,8 @@ router.post("/", async (req, res) => {
         date: date || "",
         department: department || "CSE",
         yearSemSec: yearSemSec || "II/IV/A",
-        programme: programme || "B.E"
+        programme: programme || "B.E",
+        allowEditing: allowEditing !== undefined ? allowEditing : true
       });
       await newClass.save();
       return res.json(newClass);
@@ -89,6 +91,10 @@ router.post("/:className/marks", async (req, res) => {
     // students array with regNo, name, and marks array
     const cls = await ClassData.findOne({ className: req.params.className });
     if (!cls) return res.status(404).json({ error: "Class not found" });
+
+    if (cls.allowEditing === false) {
+      return res.status(403).json({ error: "Mark entry is locked for this class." });
+    }
 
     const maxTotal = cls.subjects.length * cls.markPerSubject;
 

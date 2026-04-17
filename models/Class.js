@@ -29,7 +29,8 @@ const classSchema = new mongoose.Schema({
   date: { type: String, default: "" },
   department: { type: String, default: "CSE" },
   yearSemSec: { type: String, default: "II/IV/A" },
-  programme: { type: String, default: "B.E" }
+  programme: { type: String, default: "B.E" },
+  allowEditing: { type: Boolean, default: true }
 });
 
 module.exports = mongoose.model("Class", classSchema);
