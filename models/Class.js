@@ -14,6 +14,7 @@ const studentSchema = new mongoose.Schema({
 const courseDetailSchema = new mongoose.Schema({
   courseCode: String,
   courseName: String,
+  shortName: String,
   facultyName: String
 });
 
