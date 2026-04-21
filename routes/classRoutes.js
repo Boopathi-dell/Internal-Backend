@@ -139,6 +139,24 @@ router.get("/:className", async (req, res) => {
   try {
     const cls = await ClassData.findOne({ className: req.params.className });
     if (!cls) return res.status(404).json({ error: "Class not found" });
+
+    // Carry forward semester progress from other assessments if current is empty
+    if (!cls.semesterProgress || cls.semesterProgress.size === 0) {
+      const prevCls = await ClassData.findOne({
+        programme: cls.programme,
+        department: cls.department,
+        yearSemSec: cls.yearSemSec,
+        className: { $ne: cls.className },
+        semesterProgress: { $exists: true, $ne: {} }
+      }).sort({ _id: -1 });
+
+      if (prevCls && prevCls.semesterProgress && prevCls.semesterProgress.size > 0) {
+        const clsObj = cls.toObject();
+        clsObj.semesterProgress = prevCls.semesterProgress;
+        return res.json(clsObj);
+      }
+    }
+
     res.json(cls);
   } catch (err) {
     res.status(500).json({ error: err.message });
