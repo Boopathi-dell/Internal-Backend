@@ -145,4 +145,28 @@ router.get("/:className", async (req, res) => {
   }
 });
 
+// UPDATE CLASS METADATA (Semester Progress, Date, etc.)
+router.put("/:className/metadata", async (req, res) => {
+  try {
+    const cls = await ClassData.findOne({ className: req.params.className });
+    if (!cls) return res.status(404).json({ error: "Class not found" });
+
+    const fieldsToUpdate = [
+      "targetPassPercentage", "date", "department", 
+      "yearSemSec", "programme", "allowEditing", "semesterProgress"
+    ];
+
+    fieldsToUpdate.forEach(field => {
+      if (req.body[field] !== undefined) {
+        cls[field] = req.body[field];
+      }
+    });
+
+    await cls.save();
+    res.json(cls);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
