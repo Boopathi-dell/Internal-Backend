@@ -34,10 +34,11 @@ const classSchema = new mongoose.Schema({
   allowEditing: { type: Boolean, default: true },
   semesterProgress: {
     type: Map,
-    of: {
-      total: { type: Number, default: 0 },
-      pass: { type: Number, default: 0 }
-    },
+    of: new mongoose.Schema({
+      total: { type: String, default: "" },
+      pass: { type: String, default: "" },
+      percentage: { type: String, default: "" }
+    }, { _id: false }),
     default: {}
   }
 });

@@ -134,53 +134,26 @@ router.post("/:className/marks", async (req, res) => {
   }
 });
 
-// GET A SINGLE CLASS (For Entry, Analysis, Rank)
-router.get("/:className", async (req, res) => {
+// UPDATE SEMESTER PROGRESS DATA
+router.post("/:className/progress", async (req, res) => {
   try {
+    const { semesterProgress } = req.body;
     const cls = await ClassData.findOne({ className: req.params.className });
     if (!cls) return res.status(404).json({ error: "Class not found" });
 
-    // Carry forward semester progress from other assessments if current is empty
-    if (!cls.semesterProgress || cls.semesterProgress.size === 0) {
-      const prevCls = await ClassData.findOne({
-        programme: cls.programme,
-        department: cls.department,
-        yearSemSec: cls.yearSemSec,
-        className: { $ne: cls.className },
-        semesterProgress: { $exists: true, $ne: {} }
-      }).sort({ _id: -1 });
-
-      if (prevCls && prevCls.semesterProgress && prevCls.semesterProgress.size > 0) {
-        const clsObj = cls.toObject();
-        clsObj.semesterProgress = prevCls.semesterProgress;
-        return res.json(clsObj);
-      }
-    }
-
+    cls.semesterProgress = semesterProgress;
+    await cls.save();
     res.json(cls);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// UPDATE CLASS METADATA (Semester Progress, Date, etc.)
-router.put("/:className/metadata", async (req, res) => {
+// GET A SINGLE CLASS (For Entry, Analysis, Rank)
+router.get("/:className", async (req, res) => {
   try {
     const cls = await ClassData.findOne({ className: req.params.className });
     if (!cls) return res.status(404).json({ error: "Class not found" });
-
-    const fieldsToUpdate = [
-      "targetPassPercentage", "date", "department", 
-      "yearSemSec", "programme", "allowEditing", "semesterProgress"
-    ];
-
-    fieldsToUpdate.forEach(field => {
-      if (req.body[field] !== undefined) {
-        cls[field] = req.body[field];
-      }
-    });
-
-    await cls.save();
     res.json(cls);
   } catch (err) {
     res.status(500).json({ error: err.message });
