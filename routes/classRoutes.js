@@ -4,10 +4,12 @@ const ClassData = require("../models/Class");
 
 const formatDate = (dateStr) => {
   if (!dateStr) return "";
-  const parts = dateStr.split("-");
+  const [datePart, timePart] = dateStr.split("T");
+  const parts = datePart.split("-");
   if (parts.length !== 3) return dateStr;
   const [year, month, day] = parts;
-  return `${day}-${month}-${year}`;
+  const formattedDate = `${day}-${month}-${year}`;
+  return timePart ? `${formattedDate} ${timePart}` : formattedDate;
 };
 
 
@@ -195,13 +197,25 @@ router.post("/:className/marks", async (req, res) => {
     const year = istDate.getUTCFullYear();
     const month = String(istDate.getUTCMonth() + 1).padStart(2, '0');
     const day = String(istDate.getUTCDate()).padStart(2, '0');
-    const todayStr = `${year}-${month}-${day}`; // "YYYY-MM-DD"
+    const hours = String(istDate.getUTCHours()).padStart(2, '0');
+    const minutes = String(istDate.getUTCMinutes()).padStart(2, '0');
+    
+    const currentISTDate = `${year}-${month}-${day}`;
+    const currentISTStr = `${year}-${month}-${day}T${hours}:${minutes}`;
 
-    if (cls.editingStartDate && todayStr < cls.editingStartDate) {
-      return res.status(403).json({ error: `Mark entry is only allowed starting from ${formatDate(cls.editingStartDate)}.` });
+    if (cls.editingStartDate) {
+      const isTimeBound = cls.editingStartDate.includes("T");
+      const current = isTimeBound ? currentISTStr : currentISTDate;
+      if (current < cls.editingStartDate) {
+        return res.status(403).json({ error: `Mark entry is only allowed starting from ${formatDate(cls.editingStartDate)}.` });
+      }
     }
-    if (cls.editingEndDate && todayStr > cls.editingEndDate) {
-      return res.status(403).json({ error: `Mark entry has expired on ${formatDate(cls.editingEndDate)}.` });
+    if (cls.editingEndDate) {
+      const isTimeBound = cls.editingEndDate.includes("T");
+      const current = isTimeBound ? currentISTStr : currentISTDate;
+      if (current > cls.editingEndDate) {
+        return res.status(403).json({ error: `Mark entry has expired on ${formatDate(cls.editingEndDate)}.` });
+      }
     }
 
     const maxTotal = cls.subjects.length * cls.markPerSubject;
