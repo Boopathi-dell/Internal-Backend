@@ -24,14 +24,23 @@ router.get("/", async (req, res) => {
 // BULK UPDATE ACCESS CONTROL (LOCK/UNLOCK) FOR CLASSES
 router.post("/bulk-access", async (req, res) => {
   try {
-    const { classNames, allowEditing } = req.body;
+    const { classNames, allowEditing, editingStartDate, editingEndDate } = req.body;
     if (!Array.isArray(classNames) || classNames.length === 0) {
       return res.status(400).json({ error: "classNames must be a non-empty array" });
     }
     
+    const updateFields = { allowEditing: allowEditing };
+    if (allowEditing) {
+      updateFields.editingStartDate = editingStartDate || "";
+      updateFields.editingEndDate = editingEndDate || "";
+    } else {
+      updateFields.editingStartDate = "";
+      updateFields.editingEndDate = "";
+    }
+    
     await ClassData.updateMany(
       { className: { $in: classNames } },
-      { $set: { allowEditing: allowEditing } }
+      { $set: updateFields }
     );
     
     res.json({ message: `Successfully updated ${classNames.length} class(es).` });
@@ -39,6 +48,7 @@ router.post("/bulk-access", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 // CREATE OR UPDATE A CLASS (Admin Panel Data Setup)
 router.post("/", async (req, res) => {
