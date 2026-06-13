@@ -191,9 +191,11 @@ router.post("/:className/marks", async (req, res) => {
 
     // Check date range if specified
     const now = new Date();
-    const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
-    const istDate = new Date(utc + (3600000 * 5.5));
-    const todayStr = istDate.toISOString().split('T')[0]; // "YYYY-MM-DD"
+    const istDate = new Date(now.getTime() + 19800000); // UTC + 5.5 hours
+    const year = istDate.getUTCFullYear();
+    const month = String(istDate.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(istDate.getUTCDate()).padStart(2, '0');
+    const todayStr = `${year}-${month}-${day}`; // "YYYY-MM-DD"
 
     if (cls.editingStartDate && todayStr < cls.editingStartDate) {
       return res.status(403).json({ error: `Mark entry is only allowed starting from ${formatDate(cls.editingStartDate)}.` });
