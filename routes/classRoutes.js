@@ -21,18 +21,20 @@ router.get("/", async (req, res) => {
   }
 });
 
-// BULK UPDATE APPROVAL STATUS
-router.post("/bulk-approval", async (req, res) => {
+// BULK UPDATE ACCESS CONTROL (LOCK/UNLOCK) FOR CLASSES
+router.post("/bulk-access", async (req, res) => {
   try {
-    const { classNames, isApproved } = req.body;
-    if (!Array.isArray(classNames)) {
-      return res.status(400).json({ error: "classNames must be an array" });
+    const { classNames, allowEditing } = req.body;
+    if (!Array.isArray(classNames) || classNames.length === 0) {
+      return res.status(400).json({ error: "classNames must be a non-empty array" });
     }
+    
     await ClassData.updateMany(
       { className: { $in: classNames } },
-      { $set: { isApproved: !!isApproved } }
+      { $set: { allowEditing: allowEditing } }
     );
-    res.json({ message: "Approval status updated successfully" });
+    
+    res.json({ message: `Successfully updated ${classNames.length} class(es).` });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -41,7 +43,7 @@ router.post("/bulk-approval", async (req, res) => {
 // CREATE OR UPDATE A CLASS (Admin Panel Data Setup)
 router.post("/", async (req, res) => {
   try {
-    const { className, subjects, passMark, examName, markPerSubject, students, courseDetails, targetPassPercentage, date, department, yearSemSec, programme, allowEditing, isApproved, editingStartDate, editingEndDate, propagateRoster } = req.body;
+    const { className, subjects, passMark, examName, markPerSubject, students, courseDetails, targetPassPercentage, date, department, yearSemSec, programme, allowEditing, editingStartDate, editingEndDate, propagateRoster } = req.body;
 
     const propagateRosterToCohort = async (baseClass, roster, newCourseDetails) => {
       const otherClasses = await ClassData.find({
@@ -98,7 +100,6 @@ router.post("/", async (req, res) => {
       if (yearSemSec !== undefined) cls.yearSemSec = yearSemSec;
       if (programme !== undefined) cls.programme = programme;
       if (allowEditing !== undefined) cls.allowEditing = allowEditing;
-      if (isApproved !== undefined) cls.isApproved = isApproved;
       if (editingStartDate !== undefined) cls.editingStartDate = editingStartDate;
       if (editingEndDate !== undefined) cls.editingEndDate = editingEndDate;
       
@@ -140,7 +141,6 @@ router.post("/", async (req, res) => {
         yearSemSec: yearSemSec || "II/IV/A",
         programme: programme || "B.E",
         allowEditing: allowEditing !== undefined ? allowEditing : true,
-        isApproved: isApproved !== undefined ? isApproved : false,
         editingStartDate: editingStartDate || "",
         editingEndDate: editingEndDate || ""
       });
