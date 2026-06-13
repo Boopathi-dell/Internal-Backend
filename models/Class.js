@@ -32,6 +32,8 @@ const classSchema = new mongoose.Schema({
   yearSemSec: { type: String, default: "II/IV/A" },
   programme: { type: String, default: "B.E" },
   allowEditing: { type: Boolean, default: true },
+  editingStartDate: { type: String, default: "" },
+  editingEndDate: { type: String, default: "" },
   semesterProgress: {
     type: Map,
     of: new mongoose.Schema({

@@ -2,6 +2,15 @@ const express = require("express");
 const router = express.Router();
 const ClassData = require("../models/Class");
 
+const formatDate = (dateStr) => {
+  if (!dateStr) return "";
+  const parts = dateStr.split("-");
+  if (parts.length !== 3) return dateStr;
+  const [year, month, day] = parts;
+  return `${day}-${month}-${year}`;
+};
+
+
 // GET ALL CLASSES
 router.get("/", async (req, res) => {
   try {
@@ -15,7 +24,7 @@ router.get("/", async (req, res) => {
 // CREATE OR UPDATE A CLASS (Admin Panel Data Setup)
 router.post("/", async (req, res) => {
   try {
-    const { className, subjects, passMark, examName, markPerSubject, students, courseDetails, targetPassPercentage, date, department, yearSemSec, programme, allowEditing } = req.body;
+    const { className, subjects, passMark, examName, markPerSubject, students, courseDetails, targetPassPercentage, date, department, yearSemSec, programme, allowEditing, editingStartDate, editingEndDate } = req.body;
 
     let cls = await ClassData.findOne({ className });
     if (cls) {
@@ -31,6 +40,8 @@ router.post("/", async (req, res) => {
       if (yearSemSec !== undefined) cls.yearSemSec = yearSemSec;
       if (programme !== undefined) cls.programme = programme;
       if (allowEditing !== undefined) cls.allowEditing = allowEditing;
+      if (editingStartDate !== undefined) cls.editingStartDate = editingStartDate;
+      if (editingEndDate !== undefined) cls.editingEndDate = editingEndDate;
       
       // Preserve existing marks for students that are kept, add new ones empty
       const updatedStudents = students.map(newStudent => {
@@ -64,7 +75,9 @@ router.post("/", async (req, res) => {
         department: department || "CSE",
         yearSemSec: yearSemSec || "II/IV/A",
         programme: programme || "B.E",
-        allowEditing: allowEditing !== undefined ? allowEditing : true
+        allowEditing: allowEditing !== undefined ? allowEditing : true,
+        editingStartDate: editingStartDate || "",
+        editingEndDate: editingEndDate || ""
       });
       await newClass.save();
       return res.json(newClass);
@@ -94,6 +107,19 @@ router.post("/:className/marks", async (req, res) => {
 
     if (cls.allowEditing === false) {
       return res.status(403).json({ error: "Mark entry is locked for this class." });
+    }
+
+    // Check date range if specified
+    const now = new Date();
+    const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+    const istDate = new Date(utc + (3600000 * 5.5));
+    const todayStr = istDate.toISOString().split('T')[0]; // "YYYY-MM-DD"
+
+    if (cls.editingStartDate && todayStr < cls.editingStartDate) {
+      return res.status(403).json({ error: `Mark entry is only allowed starting from ${formatDate(cls.editingStartDate)}.` });
+    }
+    if (cls.editingEndDate && todayStr > cls.editingEndDate) {
+      return res.status(403).json({ error: `Mark entry has expired on ${formatDate(cls.editingEndDate)}.` });
     }
 
     const maxTotal = cls.subjects.length * cls.markPerSubject;
