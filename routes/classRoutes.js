@@ -4,12 +4,10 @@ const ClassData = require("../models/Class");
 
 const formatDate = (dateStr) => {
   if (!dateStr) return "";
-  const [datePart, timePart] = dateStr.split("T");
-  const parts = datePart.split("-");
+  const parts = dateStr.split("-");
   if (parts.length !== 3) return dateStr;
   const [year, month, day] = parts;
-  const formattedDate = `${day}-${month}-${year}`;
-  return timePart ? `${formattedDate} ${timePart}` : formattedDate;
+  return `${day}-${month}-${year}`;
 };
 
 
@@ -26,7 +24,7 @@ router.get("/", async (req, res) => {
 // BULK UPDATE ACCESS CONTROL (LOCK/UNLOCK) FOR CLASSES
 router.post("/bulk-access", async (req, res) => {
   try {
-    const { classNames, allowEditing, editingStartDate, editingEndDate } = req.body;
+    const { classNames, allowEditing, editingStartDate, editingEndDate, editingStartTime, editingEndTime } = req.body;
     if (!Array.isArray(classNames) || classNames.length === 0) {
       return res.status(400).json({ error: "classNames must be a non-empty array" });
     }
@@ -35,9 +33,13 @@ router.post("/bulk-access", async (req, res) => {
     if (allowEditing) {
       updateFields.editingStartDate = editingStartDate || "";
       updateFields.editingEndDate = editingEndDate || "";
+      updateFields.editingStartTime = editingStartTime || "";
+      updateFields.editingEndTime = editingEndTime || "";
     } else {
       updateFields.editingStartDate = "";
       updateFields.editingEndDate = "";
+      updateFields.editingStartTime = "";
+      updateFields.editingEndTime = "";
     }
     
     await ClassData.updateMany(
@@ -55,7 +57,7 @@ router.post("/bulk-access", async (req, res) => {
 // CREATE OR UPDATE A CLASS (Admin Panel Data Setup)
 router.post("/", async (req, res) => {
   try {
-    const { className, subjects, passMark, examName, markPerSubject, students, courseDetails, targetPassPercentage, date, department, yearSemSec, programme, allowEditing, editingStartDate, editingEndDate, propagateRoster } = req.body;
+    const { className, subjects, passMark, examName, markPerSubject, students, courseDetails, targetPassPercentage, date, department, yearSemSec, programme, allowEditing, editingStartDate, editingEndDate, editingStartTime, editingEndTime, propagateRoster } = req.body;
 
     const propagateRosterToCohort = async (baseClass, roster, newCourseDetails) => {
       const otherClasses = await ClassData.find({
@@ -114,6 +116,8 @@ router.post("/", async (req, res) => {
       if (allowEditing !== undefined) cls.allowEditing = allowEditing;
       if (editingStartDate !== undefined) cls.editingStartDate = editingStartDate;
       if (editingEndDate !== undefined) cls.editingEndDate = editingEndDate;
+      if (editingStartTime !== undefined) cls.editingStartTime = editingStartTime;
+      if (editingEndTime !== undefined) cls.editingEndTime = editingEndTime;
       
       // Preserve existing marks for students that are kept, add new ones empty
       const updatedStudents = students.map(newStudent => {
@@ -154,7 +158,9 @@ router.post("/", async (req, res) => {
         programme: programme || "B.E",
         allowEditing: allowEditing !== undefined ? allowEditing : true,
         editingStartDate: editingStartDate || "",
-        editingEndDate: editingEndDate || ""
+        editingEndDate: editingEndDate || "",
+        editingStartTime: editingStartTime || "",
+        editingEndTime: editingEndTime || ""
       });
       await newClass.save();
 
@@ -199,22 +205,18 @@ router.post("/:className/marks", async (req, res) => {
     const day = String(istDate.getUTCDate()).padStart(2, '0');
     const hours = String(istDate.getUTCHours()).padStart(2, '0');
     const minutes = String(istDate.getUTCMinutes()).padStart(2, '0');
-    
-    const currentISTDate = `${year}-${month}-${day}`;
-    const currentISTStr = `${year}-${month}-${day}T${hours}:${minutes}`;
+    const todayStr = `${year}-${month}-${day}T${hours}:${minutes}`; // YYYY-MM-DDThh:mm
 
     if (cls.editingStartDate) {
-      const isTimeBound = cls.editingStartDate.includes("T");
-      const current = isTimeBound ? currentISTStr : currentISTDate;
-      if (current < cls.editingStartDate) {
-        return res.status(403).json({ error: `Mark entry is only allowed starting from ${formatDate(cls.editingStartDate)}.` });
+      const startLimit = cls.editingStartDate + "T" + (cls.editingStartTime || "00:00");
+      if (todayStr < startLimit) {
+        return res.status(403).json({ error: `Mark entry is only allowed starting from ${formatDate(cls.editingStartDate)} ${cls.editingStartTime || "00:00"}.` });
       }
     }
     if (cls.editingEndDate) {
-      const isTimeBound = cls.editingEndDate.includes("T");
-      const current = isTimeBound ? currentISTStr : currentISTDate;
-      if (current > cls.editingEndDate) {
-        return res.status(403).json({ error: `Mark entry has expired on ${formatDate(cls.editingEndDate)}.` });
+      const endLimit = cls.editingEndDate + "T" + (cls.editingEndTime || "23:59");
+      if (todayStr > endLimit) {
+        return res.status(403).json({ error: `Mark entry has expired on ${formatDate(cls.editingEndDate)} ${cls.editingEndTime || "23:59"}.` });
       }
     }
 

@@ -34,6 +34,8 @@ const classSchema = new mongoose.Schema({
   allowEditing: { type: Boolean, default: true },
   editingStartDate: { type: String, default: "" },
   editingEndDate: { type: String, default: "" },
+  editingStartTime: { type: String, default: "" },
+  editingEndTime: { type: String, default: "" },
   semesterProgress: {
     type: Map,
     of: new mongoose.Schema({
