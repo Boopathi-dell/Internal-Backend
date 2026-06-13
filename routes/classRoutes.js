@@ -21,10 +21,27 @@ router.get("/", async (req, res) => {
   }
 });
 
+// BULK UPDATE APPROVAL STATUS
+router.post("/bulk-approval", async (req, res) => {
+  try {
+    const { classNames, isApproved } = req.body;
+    if (!Array.isArray(classNames)) {
+      return res.status(400).json({ error: "classNames must be an array" });
+    }
+    await ClassData.updateMany(
+      { className: { $in: classNames } },
+      { $set: { isApproved: !!isApproved } }
+    );
+    res.json({ message: "Approval status updated successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // CREATE OR UPDATE A CLASS (Admin Panel Data Setup)
 router.post("/", async (req, res) => {
   try {
-    const { className, subjects, passMark, examName, markPerSubject, students, courseDetails, targetPassPercentage, date, department, yearSemSec, programme, allowEditing, editingStartDate, editingEndDate, propagateRoster } = req.body;
+    const { className, subjects, passMark, examName, markPerSubject, students, courseDetails, targetPassPercentage, date, department, yearSemSec, programme, allowEditing, isApproved, editingStartDate, editingEndDate, propagateRoster } = req.body;
 
     const propagateRosterToCohort = async (baseClass, roster, newCourseDetails) => {
       const otherClasses = await ClassData.find({
@@ -81,6 +98,7 @@ router.post("/", async (req, res) => {
       if (yearSemSec !== undefined) cls.yearSemSec = yearSemSec;
       if (programme !== undefined) cls.programme = programme;
       if (allowEditing !== undefined) cls.allowEditing = allowEditing;
+      if (isApproved !== undefined) cls.isApproved = isApproved;
       if (editingStartDate !== undefined) cls.editingStartDate = editingStartDate;
       if (editingEndDate !== undefined) cls.editingEndDate = editingEndDate;
       
@@ -122,6 +140,7 @@ router.post("/", async (req, res) => {
         yearSemSec: yearSemSec || "II/IV/A",
         programme: programme || "B.E",
         allowEditing: allowEditing !== undefined ? allowEditing : true,
+        isApproved: isApproved !== undefined ? isApproved : false,
         editingStartDate: editingStartDate || "",
         editingEndDate: editingEndDate || ""
       });
