@@ -26,7 +26,7 @@ router.post("/", async (req, res) => {
   try {
     const { className, subjects, passMark, examName, markPerSubject, students, courseDetails, targetPassPercentage, date, department, yearSemSec, programme, allowEditing, editingStartDate, editingEndDate, propagateRoster } = req.body;
 
-    const propagateRosterToCohort = async (baseClass, roster) => {
+    const propagateRosterToCohort = async (baseClass, roster, newCourseDetails) => {
       const otherClasses = await ClassData.find({
         programme: baseClass.programme,
         department: baseClass.department,
@@ -35,6 +35,7 @@ router.post("/", async (req, res) => {
       });
 
       for (const otherCls of otherClasses) {
+        // Propagate students (preserve existing marks by regNo)
         const updatedOtherStudents = roster.map(newStudent => {
           const existing = otherCls.students.find(s => s.regNo === newStudent.regNo);
           if (existing) {
@@ -54,6 +55,14 @@ router.post("/", async (req, res) => {
           };
         });
         otherCls.students = updatedOtherStudents;
+
+        // Propagate course details (subjects / faculty info) to the other class
+        if (newCourseDetails && newCourseDetails.length > 0) {
+          otherCls.courseDetails = newCourseDetails;
+          // Keep subjects array in sync with course codes
+          otherCls.subjects = newCourseDetails.map(cd => cd.courseCode || "");
+        }
+
         await otherCls.save();
       }
     };
@@ -89,7 +98,7 @@ router.post("/", async (req, res) => {
       await cls.save();
 
       if (propagateRoster) {
-        await propagateRosterToCohort(cls, students);
+        await propagateRosterToCohort(cls, students, courseDetails);
       }
 
       return res.json(cls);
@@ -119,7 +128,7 @@ router.post("/", async (req, res) => {
       await newClass.save();
 
       if (propagateRoster) {
-        await propagateRosterToCohort(newClass, students);
+        await propagateRosterToCohort(newClass, students, courseDetails);
       }
 
       return res.json(newClass);
