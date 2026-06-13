@@ -24,7 +24,39 @@ router.get("/", async (req, res) => {
 // CREATE OR UPDATE A CLASS (Admin Panel Data Setup)
 router.post("/", async (req, res) => {
   try {
-    const { className, subjects, passMark, examName, markPerSubject, students, courseDetails, targetPassPercentage, date, department, yearSemSec, programme, allowEditing, editingStartDate, editingEndDate } = req.body;
+    const { className, subjects, passMark, examName, markPerSubject, students, courseDetails, targetPassPercentage, date, department, yearSemSec, programme, allowEditing, editingStartDate, editingEndDate, propagateRoster } = req.body;
+
+    const propagateRosterToCohort = async (baseClass, roster) => {
+      const otherClasses = await ClassData.find({
+        programme: baseClass.programme,
+        department: baseClass.department,
+        yearSemSec: baseClass.yearSemSec,
+        _id: { $ne: baseClass._id }
+      });
+
+      for (const otherCls of otherClasses) {
+        const updatedOtherStudents = roster.map(newStudent => {
+          const existing = otherCls.students.find(s => s.regNo === newStudent.regNo);
+          if (existing) {
+            const marks = existing.marks || Array(otherCls.subjects.length).fill("");
+            return {
+              ...existing.toObject(),
+              name: newStudent.name,
+              regNo: newStudent.regNo,
+              gender: newStudent.gender || existing.gender,
+              studentType: newStudent.studentType || existing.studentType,
+              marks: marks
+            };
+          }
+          return {
+            ...newStudent,
+            marks: Array(otherCls.subjects.length).fill("")
+          };
+        });
+        otherCls.students = updatedOtherStudents;
+        await otherCls.save();
+      }
+    };
 
     let cls = await ClassData.findOne({ className });
     if (cls) {
@@ -55,6 +87,11 @@ router.post("/", async (req, res) => {
       });
       cls.students = updatedStudents;
       await cls.save();
+
+      if (propagateRoster) {
+        await propagateRosterToCohort(cls, students);
+      }
+
       return res.json(cls);
     } else {
       // Create new
@@ -80,6 +117,11 @@ router.post("/", async (req, res) => {
         editingEndDate: editingEndDate || ""
       });
       await newClass.save();
+
+      if (propagateRoster) {
+        await propagateRosterToCohort(newClass, students);
+      }
+
       return res.json(newClass);
     }
   } catch (err) {
