@@ -6,7 +6,7 @@ const Admin = require("../models/Admin");
 const User = require("../models/User");
 const Activity = require("../models/Activity");
 const ClassData = require("../models/Class");
-
+const YearApproval = require("../models/YearApproval");
 const JWT_SECRET = "mec_result_system_secret_2025";
 
 // ADMIN LOGIN
@@ -129,6 +129,31 @@ router.delete("/users/:id", async (req, res) => {
   }
 });
 
+// GET YEAR APPROVALS
+router.get("/admin/year-approvals", async (req, res) => {
+  try {
+    const approvals = await YearApproval.find();
+    res.json(approvals);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST YEAR APPROVALS
+router.post("/admin/year-approvals", async (req, res) => {
+  try {
+    const { year, isApproved } = req.body;
+    const approval = await YearApproval.findOneAndUpdate(
+      { year },
+      { isApproved },
+      { new: true, upsert: true }
+    );
+    res.json(approval);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET ACTIVITY LOG
 router.get("/activities", async (req, res) => {
   try {
@@ -224,7 +249,19 @@ router.get("/student/results", async (req, res) => {
     const regNo = decoded.regNo;
 
     // Find all classes that contain a student with this regNo (exclude deleted classes)
-    const classes = await ClassData.find({ "students.regNo": regNo, isDeleted: { $ne: true } });
+    let classes = await ClassData.find({ "students.regNo": regNo, isDeleted: { $ne: true } });
+
+    // Filter by year approvals
+    const approvals = await YearApproval.find();
+    const approvedMap = {};
+    approvals.forEach(a => approvedMap[a.year] = a.isApproved);
+
+    classes = classes.filter(cls => {
+      if (!cls.yearSemSec) return true;
+      const year = cls.yearSemSec.split('/')[0];
+      // If it exists in DB and is false, hide it. Otherwise (true or not in DB), show it.
+      return approvedMap[year] !== false;
+    });
 
     // Process results grouped by examName or className
     const results = classes.map(cls => {
