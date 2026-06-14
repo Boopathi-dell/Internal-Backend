@@ -143,8 +143,8 @@ router.post("/student/login", async (req, res) => {
     const normalizedRegNo = regNo.trim().toUpperCase();
     const normalizedDob = dob.trim();
 
-    // Find any class containing this student
-    const classes = await ClassData.find({ "students.regNo": normalizedRegNo });
+    // Find any class containing this student (exclude deleted classes)
+    const classes = await ClassData.find({ "students.regNo": normalizedRegNo, isDeleted: { $ne: true } });
     if (classes.length === 0) {
       return res.status(404).json({ error: "Student not found in the roster" });
     }
@@ -205,8 +205,8 @@ router.get("/student/results", async (req, res) => {
 
     const regNo = decoded.regNo;
 
-    // Find all classes that contain a student with this regNo
-    const classes = await ClassData.find({ "students.regNo": regNo });
+    // Find all classes that contain a student with this regNo (exclude deleted classes)
+    const classes = await ClassData.find({ "students.regNo": regNo, isDeleted: { $ne: true } });
 
     // Process results grouped by examName or className
     const results = classes.map(cls => {

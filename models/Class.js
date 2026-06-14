@@ -45,7 +45,9 @@ const classSchema = new mongoose.Schema({
       percentage: { type: String, default: "" }
     }, { _id: false }),
     default: {}
-  }
+  },
+  isDeleted: { type: Boolean, default: false },
+  deletedAt: { type: Date, default: null }
 });
 
 module.exports = mongoose.model("Class", classSchema);

@@ -14,7 +14,18 @@ const formatDate = (dateStr) => {
 // GET ALL CLASSES
 router.get("/", async (req, res) => {
   try {
-    const classes = await ClassData.find();
+    const { deletedOnly } = req.query;
+    
+    // Auto-cleanup items older than 15 days
+    const fifteenDaysAgo = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000);
+    await ClassData.deleteMany({ isDeleted: true, deletedAt: { $lt: fifteenDaysAgo } });
+
+    let query = { isDeleted: { $ne: true } };
+    if (deletedOnly === "true") {
+      query = { isDeleted: true };
+    }
+
+    const classes = await ClassData.find(query);
     res.json(classes);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -53,11 +64,62 @@ router.post("/bulk-access", async (req, res) => {
   }
 });
 
+// BULK DELETE CLASSES (Move to Recycle Bin)
+router.post("/bulk-delete", async (req, res) => {
+  try {
+    const { classNames } = req.body;
+    if (!Array.isArray(classNames) || classNames.length === 0) {
+      return res.status(400).json({ error: "classNames must be a non-empty array" });
+    }
+    await ClassData.updateMany(
+      { className: { $in: classNames } },
+      { $set: { isDeleted: true, deletedAt: new Date() } }
+    );
+    res.json({ message: `Successfully moved ${classNames.length} class(es) to Recycle Bin.` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// BULK RESTORE CLASSES (From Recycle Bin)
+router.post("/bulk-restore", async (req, res) => {
+  try {
+    const { classNames } = req.body;
+    if (!Array.isArray(classNames) || classNames.length === 0) {
+      return res.status(400).json({ error: "classNames must be a non-empty array" });
+    }
+    await ClassData.updateMany(
+      { className: { $in: classNames } },
+      { $set: { isDeleted: false, deletedAt: null } }
+    );
+    res.json({ message: `Successfully restored ${classNames.length} class(es).` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// BULK PURGE CLASSES (Permanently Delete)
+router.post("/bulk-purge", async (req, res) => {
+  try {
+    const { classNames } = req.body;
+    if (!Array.isArray(classNames) || classNames.length === 0) {
+      return res.status(400).json({ error: "classNames must be a non-empty array" });
+    }
+    await ClassData.deleteMany({ className: { $in: classNames }, isDeleted: true });
+    res.json({ message: `Successfully permanently deleted ${classNames.length} class(es).` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 // CREATE OR UPDATE A CLASS (Admin Panel Data Setup)
 router.post("/", async (req, res) => {
   try {
     const { className, subjects, passMark, examName, markPerSubject, students, courseDetails, targetPassPercentage, date, department, yearSemSec, programme, allowEditing, editingStartDate, editingEndDate, editingStartTime, editingEndTime, propagateRoster } = req.body;
+
+    // Purge any deleted class with the same name to prevent key collisions
+    await ClassData.deleteOne({ className, isDeleted: true });
 
     const propagateRosterToCohort = async (baseClass, roster, newCourseDetails) => {
       const otherClasses = await ClassData.find({
@@ -277,7 +339,7 @@ router.post("/:className/progress", async (req, res) => {
 // GET A SINGLE CLASS (For Entry, Analysis, Rank)
 router.get("/:className", async (req, res) => {
   try {
-    const cls = await ClassData.findOne({ className: req.params.className });
+    const cls = await ClassData.findOne({ className: req.params.className, isDeleted: { $ne: true } });
     if (!cls) return res.status(404).json({ error: "Class not found" });
     res.json(cls);
   } catch (err) {
