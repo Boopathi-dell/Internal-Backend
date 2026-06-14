@@ -16,9 +16,9 @@ router.get("/", async (req, res) => {
   try {
     const { deletedOnly } = req.query;
     
-    // Auto-cleanup items older than 15 days
-    const fifteenDaysAgo = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000);
-    await ClassData.deleteMany({ isDeleted: true, deletedAt: { $lt: fifteenDaysAgo } });
+    // Auto-cleanup items older than 30 days
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    await ClassData.deleteMany({ isDeleted: true, deletedAt: { $lt: thirtyDaysAgo } });
 
     let query = { isDeleted: { $ne: true } };
     if (deletedOnly === "true") {
