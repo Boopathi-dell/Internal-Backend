@@ -34,7 +34,16 @@ router.post("/admin/login", async (req, res) => {
     if (!isMatch) return res.status(401).json({ error: "Invalid credentials" });
 
     // Fallback role to 'admin' if not set in older documents
-    const adminRole = admin.role || "admin";
+    let adminRole = admin.role || "admin";
+
+    // Force the correct role for print admin to fix DB inconsistencies
+    if (admin.email === "print.mec.cse@gmail.com") {
+      adminRole = "printAdmin";
+      if (admin.role !== "printAdmin") {
+        admin.role = "printAdmin";
+        await admin.save();
+      }
+    }
 
     const token = jwt.sign({ id: admin._id, role: adminRole }, JWT_SECRET, { expiresIn: "24h" });
     res.json({ token, role: adminRole, email: admin.email });
