@@ -15,11 +15,17 @@ router.post("/admin/login", async (req, res) => {
     const { email, password } = req.body;
     let admin = await Admin.findOne({ email });
 
-    // Auto-seed admin on first login if it doesn't exist yet
-    if (!admin && email === "boopathi.mec.cse@gmail.com" && password === "Boopathi@1431") {
-      const hashedPassword = await bcrypt.hash(password, 10);
-      admin = await Admin.create({ email, password: hashedPassword });
-      console.log("Admin account auto-created from login prompt!");
+    // Auto-seed admins on first login if they don't exist yet
+    if (!admin) {
+      if (email === "boopathi.mec.cse@gmail.com" && password === "Boopathi@1431") {
+        const hashedPassword = await bcrypt.hash(password, 10);
+        admin = await Admin.create({ email, password: hashedPassword, role: "admin" });
+        console.log("Full Admin account auto-created from login prompt!");
+      } else if (email === "print.mec.cse@gmail.com" && password === "Print@1431") {
+        const hashedPassword = await bcrypt.hash(password, 10);
+        admin = await Admin.create({ email, password: hashedPassword, role: "printAdmin" });
+        console.log("Print Admin account auto-created from login prompt!");
+      }
     }
 
     if (!admin) return res.status(401).json({ error: "Invalid credentials" });
@@ -27,8 +33,11 @@ router.post("/admin/login", async (req, res) => {
     const isMatch = await bcrypt.compare(password, admin.password);
     if (!isMatch) return res.status(401).json({ error: "Invalid credentials" });
 
-    const token = jwt.sign({ id: admin._id, role: "admin" }, JWT_SECRET, { expiresIn: "24h" });
-    res.json({ token, role: "admin", email: admin.email });
+    // Fallback role to 'admin' if not set in older documents
+    const adminRole = admin.role || "admin";
+
+    const token = jwt.sign({ id: admin._id, role: adminRole }, JWT_SECRET, { expiresIn: "24h" });
+    res.json({ token, role: adminRole, email: admin.email });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
