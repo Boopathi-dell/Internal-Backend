@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 const studentSchema = new mongoose.Schema({
   regNo: String,
   name: String,
+  dob: { type: String, default: "" },
   gender: { type: String, enum: ["Boy", "Girl"], default: "Boy" },
   studentType: { type: String, enum: ["Day Scholar", "Hosteller"], default: "Day Scholar" },
   marks: [String],

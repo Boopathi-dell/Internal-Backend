@@ -79,6 +79,7 @@ router.post("/", async (req, res) => {
               regNo: newStudent.regNo,
               gender: newStudent.gender || existing.gender,
               studentType: newStudent.studentType || existing.studentType,
+              dob: newStudent.dob || existing.dob,
               marks: marks
             };
           }
@@ -125,7 +126,7 @@ router.post("/", async (req, res) => {
         if (existing) {
           // ensure marks array is same length as new subjects
           const marks = existing.marks || Array(subjects.length).fill("");
-          return { ...existing.toObject(), name: newStudent.name, regNo: newStudent.regNo, gender: newStudent.gender || existing.gender, studentType: newStudent.studentType || existing.studentType, marks: marks };
+          return { ...existing.toObject(), name: newStudent.name, regNo: newStudent.regNo, gender: newStudent.gender || existing.gender, studentType: newStudent.studentType || existing.studentType, dob: newStudent.dob !== undefined ? newStudent.dob : existing.dob, marks: marks };
         }
         return { ...newStudent, marks: Array(subjects.length).fill("") };
       });
