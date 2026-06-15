@@ -241,15 +241,21 @@ router.put("/bulk-status", async (req, res) => {
       updateData.adminRemarks = adminRemarks;
     }
 
-    // Note: We don't do 'newMark' updates for bulk actions because 
-    // each student/subject has a different mark.
+    // We will do this individually to support dynamic string replacement
+    const requests = await CorrectionRequest.find({ _id: { $in: requestIds } });
     
-    await CorrectionRequest.updateMany(
-      { _id: { $in: requestIds } },
-      { $set: updateData }
-    );
+    for (const req of requests) {
+      req.status = status;
+      req.studentRead = false;
+      if (adminRemarks !== undefined) {
+        req.adminRemarks = adminRemarks
+          .replace(/{name}/g, req.studentName)
+          .replace(/{regNo}/g, req.studentRegNo);
+      }
+      await req.save();
+    }
     
-    res.json({ success: true, updatedCount: requestIds.length });
+    res.json({ success: true, updatedCount: requests.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
