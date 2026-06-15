@@ -14,6 +14,6 @@ const correctionRequestSchema = new mongoose.Schema({
   status: { type: String, enum: ["Pending", "Approved", "Rejected"], default: "Pending" },
   studentRead: { type: Boolean, default: true }, // Starts true, becomes false when admin replies
   createdAt: { type: Date, default: Date.now, expires: '30d' }
-});
+}, { timestamps: true });
 
 module.exports = mongoose.model("CorrectionRequest", correctionRequestSchema);
