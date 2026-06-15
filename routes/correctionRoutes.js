@@ -47,6 +47,16 @@ router.get("/", async (req, res) => {
   }
 });
 
+// Get requests by student regNo
+router.get("/student/:regNo", async (req, res) => {
+  try {
+    const requests = await CorrectionRequest.find({ studentRegNo: req.params.regNo });
+    res.json(requests);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Get pending request count
 router.get("/pending-count", async (req, res) => {
   try {
