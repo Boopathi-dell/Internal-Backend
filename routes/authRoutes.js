@@ -189,7 +189,7 @@ router.post("/student/login", async (req, res) => {
     // Find any class containing this student (exclude deleted classes)
     const classes = await ClassData.find({ "students.regNo": normalizedRegNo, isDeleted: { $ne: true } });
     if (classes.length === 0) {
-      return res.status(404).json({ error: "Student not found in the roster" });
+      return res.status(404).json({ error: "Please contact this number 9597504603 and update your details" });
     }
 
     // Find if any class has a matching DOB for this student
@@ -214,9 +214,9 @@ router.post("/student/login", async (req, res) => {
       }
 
       if (dobNotSet) {
-        return res.status(400).json({ error: "Date of Birth not set in system. Please contact Admin/Staff." });
+        return res.status(400).json({ error: "Please contact this number 9597504603 and update your details" });
       } else {
-        return res.status(401).json({ error: "Incorrect Date of Birth" });
+        return res.status(401).json({ error: "Please contact this number 9597504603 and update your details" });
       }
     }
 
