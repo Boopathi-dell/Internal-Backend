@@ -7,7 +7,7 @@ const sendEmail = require("../utils/emailService");
 // Create a new correction request
 router.post("/", async (req, res) => {
   try {
-    const { studentRegNo, studentName, className, examName, subjectCode, subjectName, currentMark, reason } = req.body;
+    const { studentRegNo, studentName, className, examName, subjectCode, subjectName, currentMark, expectedMark, reason } = req.body;
     
     // Check if a pending request already exists for this subject and exam
     const existing = await CorrectionRequest.findOne({
@@ -29,6 +29,7 @@ router.post("/", async (req, res) => {
       subjectCode,
       subjectName,
       currentMark,
+      expectedMark,
       reason
     });
 
@@ -57,6 +58,10 @@ router.post("/", async (req, res) => {
           <tr>
             <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-weight: bold;">Current Mark:</td>
             <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; color: #ef4444; font-weight: bold;">${currentMark}</td>
+          </tr>
+          <tr>
+            <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-weight: bold;">Expected Mark:</td>
+            <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; color: #10b981; font-weight: bold;">${expectedMark || "Not Specified"}</td>
           </tr>
         </table>
         <div style="margin-top: 20px; background: #f8fafc; padding: 15px; border-left: 4px solid #f59e0b; border-radius: 4px;">
