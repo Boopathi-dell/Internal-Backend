@@ -50,7 +50,7 @@ router.get("/", async (req, res) => {
 // Get requests by student regNo
 router.get("/student/:regNo", async (req, res) => {
   try {
-    const requests = await CorrectionRequest.find({ studentRegNo: req.params.regNo });
+    const requests = await CorrectionRequest.find({ studentRegNo: req.params.regNo }).sort({ createdAt: -1 });
     res.json(requests);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -70,14 +70,19 @@ router.get("/pending-count", async (req, res) => {
 // Update request status
 router.put("/:id/status", async (req, res) => {
   try {
-    const { status } = req.body;
+    const { status, adminRemarks } = req.body;
     if (!["Pending", "Approved", "Rejected"].includes(status)) {
       return res.status(400).json({ error: "Invalid status value" });
     }
     
+    const updateData = { status };
+    if (adminRemarks !== undefined) {
+      updateData.adminRemarks = adminRemarks;
+    }
+
     const request = await CorrectionRequest.findByIdAndUpdate(
       req.params.id,
-      { status },
+      updateData,
       { new: true }
     );
     

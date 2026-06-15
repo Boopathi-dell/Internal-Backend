@@ -9,6 +9,7 @@ const correctionRequestSchema = new mongoose.Schema({
   subjectName: { type: String, required: true },
   currentMark: { type: String, required: true },
   reason: { type: String, required: true },
+  adminRemarks: { type: String, default: "" },
   status: { type: String, enum: ["Pending", "Approved", "Rejected"], default: "Pending" },
   createdAt: { type: Date, default: Date.now }
 });
