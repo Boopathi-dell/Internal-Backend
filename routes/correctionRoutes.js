@@ -47,6 +47,16 @@ router.get("/", async (req, res) => {
   }
 });
 
+// Get pending request count
+router.get("/pending-count", async (req, res) => {
+  try {
+    const count = await CorrectionRequest.countDocuments({ status: "Pending" });
+    res.json({ count });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Update request status
 router.put("/:id/status", async (req, res) => {
   try {
