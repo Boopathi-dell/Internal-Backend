@@ -4,6 +4,7 @@ const mongoose = require("mongoose");
 const cors = require("cors");
 const classRoutes = require("./routes/classRoutes");
 const authRoutes = require("./routes/authRoutes");
+const correctionRoutes = require("./routes/correctionRoutes");
 
 const app = express();
 app.use(cors({
@@ -16,6 +17,7 @@ app.use(express.json());
 // Routes
 app.use("/api/classes", classRoutes);
 app.use("/api/auth", authRoutes);
+app.use("/api/corrections", correctionRoutes);
 
 // MongoDB connect
 const MONGO_URI = process.env.MONGO_URI;
