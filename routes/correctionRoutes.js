@@ -98,11 +98,38 @@ router.get("/student/:regNo", async (req, res) => {
   }
 });
 
-// Get pending request count
+// Get pending request count (Admin)
 router.get("/pending-count", async (req, res) => {
   try {
     const count = await CorrectionRequest.countDocuments({ status: "Pending" });
     res.json({ count });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get unread request count for a student
+router.get("/student/:regNo/unread-count", async (req, res) => {
+  try {
+    const count = await CorrectionRequest.countDocuments({ 
+      studentRegNo: req.params.regNo,
+      status: { $ne: "Pending" },
+      studentRead: false 
+    });
+    res.json({ count });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Mark student requests as read
+router.put("/student/:regNo/mark-read", async (req, res) => {
+  try {
+    await CorrectionRequest.updateMany(
+      { studentRegNo: req.params.regNo, studentRead: false },
+      { $set: { studentRead: true } }
+    );
+    res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -178,6 +205,7 @@ router.put("/:id/status", async (req, res) => {
 
     // 3. Update the request status and remarks
     request.status = status;
+    request.studentRead = false; // Mark unread for student
     if (adminRemarks !== undefined) {
       request.adminRemarks = adminRemarks;
     }
@@ -203,7 +231,7 @@ router.put("/bulk-status", async (req, res) => {
       return res.status(400).json({ error: "Invalid status value" });
     }
     
-    const updateData = { status };
+    const updateData = { status, studentRead: false };
     if (adminRemarks !== undefined) {
       updateData.adminRemarks = adminRemarks;
     }
