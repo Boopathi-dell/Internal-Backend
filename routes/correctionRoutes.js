@@ -169,6 +169,11 @@ router.put("/:id/status", async (req, res) => {
         if (subjectIndex !== -1) {
           const studentIndex = cls.students.findIndex(s => s.regNo === request.studentRegNo);
           if (studentIndex !== -1) {
+            const markNum = Number(newMark);
+            if (String(newMark).toUpperCase() !== "AB" && String(newMark).toUpperCase() !== "A" && !isNaN(markNum) && markNum > cls.markPerSubject) {
+              return res.status(400).json({ error: `Mark cannot exceed the maximum mark of ${cls.markPerSubject}` });
+            }
+            
             const student = cls.students[studentIndex];
             
             // Ensure marks array exists and has length
