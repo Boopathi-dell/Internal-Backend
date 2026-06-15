@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const CorrectionRequest = require("../models/CorrectionRequest");
 const Class = require("../models/Class");
+const sendEmail = require("../utils/emailService");
 
 // Create a new correction request
 router.post("/", async (req, res) => {
@@ -32,6 +33,45 @@ router.post("/", async (req, res) => {
     });
 
     await newRequest.save();
+
+    // Send Email Notification to Admin
+    const adminEmail = process.env.ADMIN_EMAIL || "boopathi.mec.cse@gmail.com";
+    const emailSubject = `New Mark Correction Request: ${subjectCode}`;
+    const emailHtml = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 10px;">
+        <h2 style="color: #4f46e5;">New Correction Request</h2>
+        <p>A new mark correction request has been submitted by a student.</p>
+        <table style="width: 100%; border-collapse: collapse; margin-top: 20px;">
+          <tr>
+            <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-weight: bold;">Student Name:</td>
+            <td style="padding: 10px; border-bottom: 1px solid #e2e8f0;">${studentName} (${studentRegNo})</td>
+          </tr>
+          <tr>
+            <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-weight: bold;">Exam:</td>
+            <td style="padding: 10px; border-bottom: 1px solid #e2e8f0;">${examName}</td>
+          </tr>
+          <tr>
+            <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-weight: bold;">Subject:</td>
+            <td style="padding: 10px; border-bottom: 1px solid #e2e8f0;">${subjectName} (${subjectCode})</td>
+          </tr>
+          <tr>
+            <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-weight: bold;">Current Mark:</td>
+            <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; color: #ef4444; font-weight: bold;">${currentMark}</td>
+          </tr>
+        </table>
+        <div style="margin-top: 20px; background: #f8fafc; padding: 15px; border-left: 4px solid #f59e0b; border-radius: 4px;">
+          <strong>Student's Reason:</strong><br/>
+          <p style="margin-top: 10px; font-style: italic;">"${reason}"</p>
+        </div>
+        <div style="margin-top: 30px; text-align: center;">
+          <a href="https://internal-frontend-theta.vercel.app/requests" style="background: #4f46e5; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px; font-weight: bold;">View Request</a>
+        </div>
+      </div>
+    `;
+    
+    // Don't wait for email to send, run it async
+    sendEmail(adminEmail, emailSubject, emailHtml).catch(e => console.error("Email failed:", e));
+
     res.status(201).json(newRequest);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -145,6 +185,38 @@ router.put("/:id/status", async (req, res) => {
     await request.save();
     
     res.json(request);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Bulk update request status
+router.put("/bulk-status", async (req, res) => {
+  try {
+    const { requestIds, status, adminRemarks } = req.body;
+    
+    if (!Array.isArray(requestIds) || requestIds.length === 0) {
+      return res.status(400).json({ error: "No requests selected" });
+    }
+    
+    if (!["Pending", "Approved", "Rejected"].includes(status)) {
+      return res.status(400).json({ error: "Invalid status value" });
+    }
+    
+    const updateData = { status };
+    if (adminRemarks !== undefined) {
+      updateData.adminRemarks = adminRemarks;
+    }
+
+    // Note: We don't do 'newMark' updates for bulk actions because 
+    // each student/subject has a different mark.
+    
+    await CorrectionRequest.updateMany(
+      { _id: { $in: requestIds } },
+      { $set: updateData }
+    );
+    
+    res.json({ success: true, updatedCount: requestIds.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
