@@ -56,7 +56,7 @@ router.put("/:id/approve", async (req, res) => {
     // Update the class
     const updatedClass = await Class.findByIdAndUpdate(
       request.classId,
-      { editingEndDate, editingEndTime },
+      { editingEndDate, editingEndTime, allowEditing: true },
       { new: true }
     );
 
