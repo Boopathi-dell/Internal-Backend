@@ -6,7 +6,7 @@ const Class = require("../models/Class");
 // Create a new extension request
 router.post("/request", async (req, res) => {
   try {
-    const { classId, className, facultyName } = req.body;
+    const { classId, className, facultyName, facultyId } = req.body;
     
     if (!classId || !className) {
       return res.status(400).json({ error: "classId and className are required" });
@@ -15,7 +15,8 @@ router.post("/request", async (req, res) => {
     const newRequest = new ExtensionRequest({
       classId,
       className,
-      facultyName
+      facultyName,
+      facultyId
     });
 
     await newRequest.save();
