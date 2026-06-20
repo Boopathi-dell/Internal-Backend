@@ -35,7 +35,7 @@ router.get("/", adminOrFacultyAuth, async (req, res) => {
 // POST CREATE ANNOUNCEMENT (Admin/Faculty side)
 router.post("/", adminOrFacultyAuth, async (req, res) => {
   try {
-    const { title, content, category, targetProgramme, targetDepartment, targetYear, targetSection } = req.body;
+    const { title, content, category, targetProgramme, targetDepartment, targetYear, targetSection, image } = req.body;
 
     if (!title || !content || !category) {
       return res.status(400).json({ error: "Title, content, and category are required" });
@@ -53,9 +53,10 @@ router.post("/", adminOrFacultyAuth, async (req, res) => {
       content,
       category,
       targetProgramme: targetProgramme || "All",
-      targetDepartment: targetDepartment || "All",
-      targetYear: targetYear || "All",
-      targetSection: targetSection || "All",
+      targetDepartment: targetDepartment || "CSE",
+      targetYear: targetYear || ["All"],
+      targetSection: targetSection || ["All"],
+      image: image || null,
       createdBy
     });
 
@@ -91,8 +92,8 @@ router.get("/student", async (req, res) => {
       $and: [
         { $or: [{ targetProgramme: "All" }, { targetProgramme: programme }] },
         { $or: [{ targetDepartment: "All" }, { targetDepartment: department }] },
-        { $or: [{ targetYear: "All" }, { targetYear: year }] },
-        { $or: [{ targetSection: "All" }, { targetSection: section }] }
+        { targetYear: { $in: ["All", year] } },
+        { targetSection: { $in: ["All", section] } }
       ]
     }).sort({ createdAt: -1 });
 
