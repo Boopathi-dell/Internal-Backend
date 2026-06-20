@@ -35,7 +35,7 @@ router.get("/department", async (req, res) => {
       const section = parts.length === 3 ? parts[2] : "Unknown";
       
       const totalStudents = cls.students.length;
-      const passedStudents = cls.students.filter(s => s.result === "P").length;
+      const passedStudents = cls.students.filter(s => s.result === "Pass").length;
       const failedStudents = totalStudents - passedStudents;
       const passPercentage = totalStudents > 0 ? ((passedStudents / totalStudents) * 100).toFixed(2) : 0;
 
