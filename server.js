@@ -6,6 +6,7 @@ const classRoutes = require("./routes/classRoutes");
 const authRoutes = require("./routes/authRoutes");
 const correctionRoutes = require("./routes/correctionRoutes");
 const extensionRoutes = require("./routes/extensionRoutes");
+const analysisRoutes = require("./routes/analysisRoutes");
 
 const app = express();
 app.use(cors({
@@ -20,6 +21,7 @@ app.use("/api/classes", classRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/corrections", correctionRoutes);
 app.use("/api/extensions", extensionRoutes);
+app.use("/api/analysis", analysisRoutes);
 
 // MongoDB connect
 const MONGO_URI = process.env.MONGO_URI;
