@@ -157,6 +157,10 @@ router.post("/admin/year-approvals", async (req, res) => {
 // GET ACTIVITY LOG
 router.get("/activities", async (req, res) => {
   try {
+    // Auto-cleanup logs older than 20 days
+    const twentyDaysAgo = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000);
+    await Activity.deleteMany({ timestamp: { $lt: twentyDaysAgo } });
+
     const activities = await Activity.find().sort({ timestamp: -1 }).limit(100);
     res.json(activities);
   } catch (err) {
