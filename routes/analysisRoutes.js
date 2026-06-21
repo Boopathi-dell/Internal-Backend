@@ -14,13 +14,13 @@ router.get("/department", async (req, res) => {
     // Find all classes matching the criteria
     // Class documents have yearSemSec like "III/VI/A"
     const query = {
-      yearSemSec: { $regex: new RegExp(`^${year}/${semester}/`) },
-      examName: exam,
+      yearSemSec: { $regex: new RegExp(`^${year}/${semester}/`, "i") },
+      examName: { $regex: new RegExp(`^${exam}$`, "i") },
       isDeleted: { $ne: true }
     };
     
     if (department) {
-      query.department = department;
+      query.department = { $regex: new RegExp(`^${department}$`, "i") };
     }
 
     const classes = await ClassData.find(query);
