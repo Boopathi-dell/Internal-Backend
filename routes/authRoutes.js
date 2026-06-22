@@ -7,6 +7,7 @@ const User = require("../models/User");
 const Activity = require("../models/Activity");
 const ClassData = require("../models/Class");
 const YearApproval = require("../models/YearApproval");
+const Advisor = require("../models/Advisor");
 const JWT_SECRET = "mec_result_system_secret_2025";
 
 // ADMIN LOGIN
@@ -311,6 +312,30 @@ router.get("/student/results", async (req, res) => {
       regNo,
       results
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// CHECK FACULTY ADVISOR STATUS
+router.get("/faculty/advisor-status", async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(" ")[1];
+    if (!token) return res.status(401).json({ error: "Unauthorized" });
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded.role !== "user") return res.status(403).json({ error: "Access denied" });
+
+    const user = await User.findById(decoded.id);
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    const advisor = await Advisor.findOne({ advisorName: user.name });
+    
+    if (advisor) {
+      res.json({ isAdvisor: true, classDetails: advisor });
+    } else {
+      res.json({ isAdvisor: false });
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
