@@ -210,36 +210,54 @@ router.get("/daily-report", facultyOrAdminAuth, async (req, res) => {
       return res.status(400).json({ error: "Date and department are required parameters" });
     }
 
-    // Find all active classes in the department
-    const classes = await ClassData.find({ department, isDeleted: { $ne: true } });
+    // Use Advisor collection as single source of truth for unique class list
+    // (ClassData has multiple documents per class - one per exam, causing duplicates)
+    const advisors = await Advisor.find({ department });
 
-    // Retrieve attendance records for the given date
+    // Retrieve attendance records already submitted for this date
     const attendanceRecords = await Attendance.find({ date, department });
 
-    const reportData = classes.map(cls => {
-      if (!cls.yearSemSec) return null;
+    // For pending classes, get student count from ClassData (latest document per class)
+    // Build a map: "year-section" -> student count
+    const allClasses = await ClassData.find({ department, isDeleted: { $ne: true } });
+    const studentCountMap = {};
+    allClasses.forEach(cls => {
+      if (!cls.yearSemSec) return;
       const parts = cls.yearSemSec.split("/");
-      const clsYear = parts[0];
-      const clsSec = parts[2];
+      const yr = parts[0];
+      const sec = parts[2];
+      if (!yr || !sec) return;
+      const key = `${cls.programme}-${yr}-${sec}`;
+      // Take the max student count (most populated exam doc for that class)
+      if (!studentCountMap[key] || cls.students.length > studentCountMap[key]) {
+        studentCountMap[key] = cls.students.length;
+      }
+    });
 
+    const reportData = advisors.map(adv => {
       const att = attendanceRecords.find(a =>
-        a.programme === cls.programme &&
-        a.year === clsYear &&
-        a.section === clsSec
+        a.programme === adv.programme &&
+        a.year === adv.year &&
+        a.section === adv.section
       );
 
+      const countKey = `${adv.programme}-${adv.year}-${adv.section}`;
+      const totalStudents = att ? att.totalCount : (studentCountMap[countKey] || 0);
+
       return {
-        programme: cls.programme,
-        year: clsYear,
-        section: clsSec,
-        total: cls.students.length,
+        programme: adv.programme,
+        department: adv.department,
+        year: adv.year,
+        section: adv.section,
+        advisorName: adv.advisorName,
+        total: totalStudents,
         present: att ? att.presentCount : "-",
         absent: att ? att.absentCount : "-",
         submitted: att ? att.submitted : false
       };
-    }).filter(Boolean);
+    });
 
-    // Sort reportData logically: Year -> Section
+    // Sort logically: Year -> Section
     const yearOrder = { "I": 1, "II": 2, "III": 3, "IV": 4 };
     reportData.sort((a, b) => {
       const ya = yearOrder[a.year] || 9;
