@@ -201,36 +201,8 @@ router.post("/", async (req, res) => {
 
       return res.json(cls);
     } else {
-      // Create new — auto-fill students from any existing cohort class if none provided
-      let finalStudents = (students && students.length > 0) ? students : [];
-      if (finalStudents.length === 0) {
-        try {
-          const yearPart = (yearSemSec || "").split("/")[0];
-          const sectionPart = (yearSemSec || "").split("/")[2];
-          const allCohortClasses = await ClassData.find({
-            programme: programme || "B.E",
-            department: department || "CSE",
-            isDeleted: { $ne: true }
-          }, { yearSemSec: 1, students: 1 });
-          const cohort = allCohortClasses.find(c => {
-            const parts = (c.yearSemSec || "").split("/");
-            return parts[0] === yearPart && parts[2] === sectionPart && c.students && c.students.length > 0;
-          });
-          if (cohort) {
-            finalStudents = cohort.students.map(s => ({
-              regNo: s.regNo,
-              name: s.name,
-              dob: s.dob || "",
-              gender: s.gender || "Boy",
-              studentType: s.studentType || "Day Scholar"
-            }));
-          }
-        } catch (cohortErr) {
-          console.error("Could not auto-fill from cohort:", cohortErr.message);
-        }
-      }
-
-      const sList = finalStudents.map(s => ({
+      // Create new
+      const sList = students.map(s => ({
         ...s,
         marks: Array(subjects.length).fill("")
       }));
@@ -256,115 +228,11 @@ router.post("/", async (req, res) => {
       await newClass.save();
 
       if (propagateRoster) {
-        await propagateRosterToCohort(newClass, finalStudents, courseDetails);
+        await propagateRosterToCohort(newClass, students, courseDetails);
       }
 
       return res.json(newClass);
     }
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-// GET COHORT STUDENTS FROM EXISTING CLASS RECORDS
-// GET /api/classes/roster-lookup?programme=B.E&department=CSE&year=II&section=A
-router.get("/roster-lookup", async (req, res) => {
-  try {
-    const { programme, department, year, section } = req.query;
-    if (!year || !section) return res.status(400).json({ error: "year and section are required" });
-
-    const allClasses = await ClassData.find({
-      programme: programme || "B.E",
-      department: department || "CSE",
-      isDeleted: { $ne: true }
-    }, { yearSemSec: 1, students: 1, className: 1 });
-
-    // Find first class that matches year and section with students
-    const match = allClasses.find(c => {
-      const parts = (c.yearSemSec || "").split("/");
-      return parts[0] === year && parts[2] === section && c.students && c.students.length > 0;
-    });
-
-    if (!match) return res.status(404).json({ error: "No students found for this cohort" });
-
-    const students = match.students.map(s => ({
-      regNo: s.regNo,
-      name: s.name,
-      dob: s.dob || "",
-      gender: s.gender || "Boy",
-      studentType: s.studentType || "Day Scholar"
-    }));
-
-    res.json({ students, sourceClass: match.className, count: students.length });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// SYNC ROSTER STUDENTS TO ALL MATCHING CLASS RECORDS
-// POST /api/classes/roster-sync  { programme, department, year, section, students }
-router.post("/roster-sync", async (req, res) => {
-  try {
-    const { programme, department, year, section, students } = req.body;
-    if (!year || !section || !Array.isArray(students)) {
-      return res.status(400).json({ error: "year, section and students array are required" });
-    }
-
-    const allClasses = await ClassData.find({
-      programme: programme || "B.E",
-      department: department || "CSE",
-      isDeleted: { $ne: true }
-    });
-
-    const matchingClasses = allClasses.filter(cls => {
-      const parts = (cls.yearSemSec || "").split("/");
-      return parts[0] === year && parts[2] === section;
-    });
-
-    let syncCount = 0;
-    for (const cls of matchingClasses) {
-      const numSubjects = cls.subjects ? cls.subjects.length : 0;
-
-      // Merge roster data into existing class students (preserve marks)
-      const updatedStudents = students.map(rosterStudent => {
-        const existing = cls.students.find(s => s.regNo === rosterStudent.regNo);
-        if (existing) {
-          // Update info but KEEP marks/total/percentage/result
-          return {
-            ...existing.toObject(),
-            name: rosterStudent.name,
-            dob: rosterStudent.dob !== undefined ? rosterStudent.dob : (existing.dob || ""),
-            gender: rosterStudent.gender || existing.gender || "Boy",
-            studentType: rosterStudent.studentType || existing.studentType || "Day Scholar"
-          };
-        } else {
-          // New student — add with empty marks
-          return {
-            regNo: rosterStudent.regNo,
-            name: rosterStudent.name,
-            dob: rosterStudent.dob || "",
-            gender: rosterStudent.gender || "Boy",
-            studentType: rosterStudent.studentType || "Day Scholar",
-            marks: Array(numSubjects).fill(""),
-            total: 0,
-            percentage: 0,
-            result: "-"
-          };
-        }
-      });
-
-      // Keep students in class that are NOT in the new roster (safety)
-      const newRegNos = new Set(students.map(s => s.regNo));
-      const extraStudents = cls.students.filter(s => !newRegNos.has(s.regNo));
-
-      cls.students = [...updatedStudents, ...extraStudents];
-      await cls.save();
-      syncCount++;
-    }
-
-    res.json({
-      syncedClasses: syncCount,
-      message: `Synced ${students.length} students to ${syncCount} class record(s).`
-    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
