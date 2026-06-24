@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const ClassData = require("../models/Class");
+const StudentRoster = require("../models/StudentRoster");
 
 const formatDate = (dateStr) => {
   if (!dateStr) return "";
@@ -201,8 +202,33 @@ router.post("/", async (req, res) => {
 
       return res.json(cls);
     } else {
-      // Create new
-      const sList = students.map(s => ({
+      // Create new — try to populate students from roster if none provided
+      let finalStudents = students || [];
+      if (finalStudents.length === 0) {
+        try {
+          const yearPart = (yearSemSec || "").split("/")[0];
+          const sectionPart = (yearSemSec || "").split("/")[2];
+          const roster = await StudentRoster.findOne({
+            programme: programme || "B.E",
+            department: department || "CSE",
+            year: yearPart,
+            section: sectionPart
+          });
+          if (roster && roster.students && roster.students.length > 0) {
+            finalStudents = roster.students.map(s => ({
+              regNo: s.regNo,
+              name: s.name,
+              dob: s.dob || "",
+              gender: s.gender || "Boy",
+              studentType: s.studentType || "Day Scholar"
+            }));
+          }
+        } catch (rosterErr) {
+          console.error("Could not load roster for new class:", rosterErr.message);
+        }
+      }
+
+      const sList = finalStudents.map(s => ({
         ...s,
         marks: Array(subjects.length).fill("")
       }));
@@ -228,7 +254,7 @@ router.post("/", async (req, res) => {
       await newClass.save();
 
       if (propagateRoster) {
-        await propagateRosterToCohort(newClass, students, courseDetails);
+        await propagateRosterToCohort(newClass, finalStudents, courseDetails);
       }
 
       return res.json(newClass);
