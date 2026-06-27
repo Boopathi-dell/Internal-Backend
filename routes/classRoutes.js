@@ -112,6 +112,61 @@ router.post("/bulk-purge", async (req, res) => {
   }
 });
 
+// SAVE ROSTER ONLY
+router.post("/roster", async (req, res) => {
+  try {
+    const { students, department, yearSemSec, programme } = req.body;
+    
+    const otherClasses = await ClassData.find({ programme, department, yearSemSec });
+    
+    if (otherClasses.length === 0) {
+      // Create a base roster class to hold the students
+      const baseClassName = `${programme}-${department} - ${yearSemSec.replace(/\//g, '/')} - Base Roster`;
+      await ClassData.deleteOne({ className: baseClassName });
+      const newCls = new ClassData({
+        className: baseClassName,
+        examName: "Base Roster",
+        passMark: 0,
+        markPerSubject: 0,
+        students: students,
+        department,
+        yearSemSec,
+        programme,
+        isDeleted: false
+      });
+      await newCls.save();
+    } else {
+      // Update roster for all existing classes in this cohort
+      for (const cls of otherClasses) {
+        const updatedStudents = students.map(newStudent => {
+          const existing = cls.students.find(s => s.regNo === newStudent.regNo);
+          if (existing) {
+            const marks = existing.marks || Array(cls.subjects.length).fill("");
+            return {
+              ...existing.toObject(),
+              name: newStudent.name,
+              regNo: newStudent.regNo,
+              gender: newStudent.gender || existing.gender,
+              studentType: newStudent.studentType || existing.studentType,
+              dob: newStudent.dob || existing.dob,
+              marks: marks
+            };
+          }
+          return {
+            ...newStudent,
+            marks: Array(cls.subjects.length).fill("")
+          };
+        });
+        cls.students = updatedStudents;
+        await cls.save();
+      }
+    }
+    res.json({ message: "Roster saved successfully." });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 // CREATE OR UPDATE A CLASS (Admin Panel Data Setup)
 router.post("/", async (req, res) => {
