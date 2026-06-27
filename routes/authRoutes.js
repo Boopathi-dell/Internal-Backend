@@ -12,7 +12,7 @@ const JWT_SECRET = "mec_result_system_secret_2025";
 // ADMIN LOGIN
 router.post("/admin/login", async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, securityCode } = req.body;
     let admin = await Admin.findOne({ email });
 
     // Auto-seed admins on first login if they don't exist yet
@@ -33,6 +33,16 @@ router.post("/admin/login", async (req, res) => {
     const isMatch = await bcrypt.compare(password, admin.password);
     if (!isMatch) return res.status(401).json({ error: "Invalid credentials" });
 
+    // Security Code Logic
+    if (admin.securityCode && admin.securityCode.trim() !== "") {
+      if (!securityCode) {
+        return res.json({ requireSecurityCode: true, email: admin.email });
+      }
+      if (admin.securityCode !== securityCode) {
+        return res.status(401).json({ error: "Invalid Security Code" });
+      }
+    }
+
     // Fallback role to 'admin' if not set in older documents
     let adminRole = admin.role || "admin";
 
@@ -47,6 +57,80 @@ router.post("/admin/login", async (req, res) => {
 
     const token = jwt.sign({ id: admin._id, role: adminRole }, JWT_SECRET, { expiresIn: "24h" });
     res.json({ token, role: adminRole, email: admin.email });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET SECURITY QUESTION
+router.post("/admin/get-security-question", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const admin = await Admin.findOne({ email });
+    if (!admin) return res.status(401).json({ error: "Invalid credentials" });
+
+    const isMatch = await bcrypt.compare(password, admin.password);
+    if (!isMatch) return res.status(401).json({ error: "Invalid credentials" });
+
+    if (!admin.securityQuestion) {
+      return res.status(400).json({ error: "No security question set for this account." });
+    }
+
+    res.json({ question: admin.securityQuestion });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// VERIFY SECURITY ANSWER
+router.post("/admin/verify-security-answer", async (req, res) => {
+  try {
+    const { email, password, securityAnswer } = req.body;
+    const admin = await Admin.findOne({ email });
+    if (!admin) return res.status(401).json({ error: "Invalid credentials" });
+
+    const isMatch = await bcrypt.compare(password, admin.password);
+    if (!isMatch) return res.status(401).json({ error: "Invalid credentials" });
+
+    if (!admin.securityAnswer) {
+      return res.status(400).json({ error: "No security answer set for this account." });
+    }
+
+    if (admin.securityAnswer.toLowerCase() !== securityAnswer.toLowerCase()) {
+      return res.status(401).json({ error: "Incorrect Answer" });
+    }
+
+    // Login successful
+    let adminRole = admin.role || "admin";
+    const token = jwt.sign({ id: admin._id, role: adminRole }, JWT_SECRET, { expiresIn: "24h" });
+    res.json({ token, role: adminRole, email: admin.email, message: "Logged in via Security Question" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// SET SECURITY (Protected Route)
+router.post("/admin/set-security", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).json({ error: "No token provided" });
+    const token = authHeader.split(" ")[1];
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded.role !== "admin" && decoded.role !== "printAdmin") {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    const { securityCode, securityQuestion, securityAnswer } = req.body;
+    
+    const admin = await Admin.findById(decoded.id);
+    if (!admin) return res.status(404).json({ error: "Admin not found" });
+
+    admin.securityCode = securityCode;
+    admin.securityQuestion = securityQuestion;
+    admin.securityAnswer = securityAnswer;
+    await admin.save();
+
+    res.json({ message: "Security settings updated successfully!" });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
