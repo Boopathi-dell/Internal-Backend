@@ -12,6 +12,23 @@ const formatDate = (dateStr) => {
 
 
 // GET ALL CLASSES
+router.get("/migrate/assignments", async (req, res) => {
+  try {
+    const classes = await ClassData.find({ examName: /Assignment/i });
+    let count = 0;
+    for (let c of classes) {
+      c.examName = c.examName.replace(/Assignment/ig, "Unit Test");
+      c.className = c.className.replace(/Assignment/ig, "Unit Test");
+      await c.save();
+      count++;
+    }
+    res.json({ success: true, count, message: "Migrated Assignment to Unit Test successfully!" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET ALL CLASSES
 router.get("/", async (req, res) => {
   try {
     const { deletedOnly } = req.query;
