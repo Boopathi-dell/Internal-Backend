@@ -176,6 +176,23 @@ router.post("/", async (req, res) => {
     // Purge any deleted class with the same name to prevent key collisions
     await ClassData.deleteOne({ className, isDeleted: true });
 
+    if (courseDetails && Array.isArray(courseDetails)) {
+      const siblingClasses = await ClassData.find({ programme, department, yearSemSec });
+      for (let cd of courseDetails) {
+        if (!cd.courseName || cd.courseName.trim() === "") {
+          for (let sCls of siblingClasses) {
+            const match = (sCls.courseDetails || []).find(c => c.courseCode === cd.courseCode && c.courseName);
+            if (match && match.courseName) {
+              cd.courseName = match.courseName;
+              cd.shortName = cd.shortName || match.shortName;
+              cd.facultyName = cd.facultyName || match.facultyName;
+              break;
+            }
+          }
+        }
+      }
+    }
+
     const propagateRosterToCohort = async (baseClass, roster, newCourseDetails) => {
       const otherClasses = await ClassData.find({
         programme: baseClass.programme,
@@ -242,10 +259,10 @@ router.post("/", async (req, res) => {
         const existing = cls.students.find(s => s.regNo === newStudent.regNo);
         if (existing) {
           // ensure marks array is same length as new subjects
-          const marks = existing.marks || Array(subjects.length).fill("");
+          const marks = (newStudent.marks && newStudent.marks.length > 0) ? newStudent.marks : (existing.marks || Array(subjects.length).fill(""));
           return { ...existing.toObject(), name: newStudent.name, regNo: newStudent.regNo, gender: newStudent.gender || existing.gender, studentType: newStudent.studentType || existing.studentType, dob: newStudent.dob !== undefined ? newStudent.dob : existing.dob, marks: marks };
         }
-        return { ...newStudent, marks: Array(subjects.length).fill("") };
+        return { ...newStudent, marks: (newStudent.marks && newStudent.marks.length > 0) ? newStudent.marks : Array(subjects.length).fill("") };
       });
       cls.students = updatedStudents;
       await cls.save();
@@ -259,7 +276,7 @@ router.post("/", async (req, res) => {
       // Create new
       const sList = students.map(s => ({
         ...s,
-        marks: Array(subjects.length).fill("")
+        marks: (s.marks && s.marks.length > 0) ? s.marks : Array(subjects.length).fill("")
       }));
       const newClass = new ClassData({
         className,
