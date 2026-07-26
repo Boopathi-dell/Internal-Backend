@@ -176,23 +176,6 @@ router.post("/", async (req, res) => {
     // Purge any deleted class with the same name to prevent key collisions
     await ClassData.deleteOne({ className, isDeleted: true });
 
-    if (courseDetails && Array.isArray(courseDetails)) {
-      const siblingClasses = await ClassData.find({ programme, department, yearSemSec });
-      for (let cd of courseDetails) {
-        if (!cd.courseName || cd.courseName.trim() === "") {
-          for (let sCls of siblingClasses) {
-            const match = (sCls.courseDetails || []).find(c => c.courseCode === cd.courseCode && c.courseName);
-            if (match && match.courseName) {
-              cd.courseName = match.courseName;
-              cd.shortName = cd.shortName || match.shortName;
-              cd.facultyName = cd.facultyName || match.facultyName;
-              break;
-            }
-          }
-        }
-      }
-    }
-
     const propagateRosterToCohort = async (baseClass, roster, newCourseDetails) => {
       const otherClasses = await ClassData.find({
         programme: baseClass.programme,
