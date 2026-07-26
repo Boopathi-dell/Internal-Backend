@@ -9,7 +9,8 @@ const studentSchema = new mongoose.Schema({
   marks: [String],
   total: { type: Number, default: 0 },
   percentage: { type: Number, default: 0 },
-  result: { type: String, default: "-" }
+  result: { type: String, default: "-" },
+  attendance: { type: String, default: "" }
 });
 
 const courseDetailSchema = new mongoose.Schema({

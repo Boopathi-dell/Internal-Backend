@@ -402,4 +402,24 @@ router.get("/:className", async (req, res) => {
   }
 });
 
+// SAVE ATTENDANCE
+router.post("/:className/attendance", async (req, res) => {
+  try {
+    const { attendanceMap } = req.body;
+    const cls = await ClassData.findOne({ className: req.params.className });
+    if (!cls) return res.status(404).json({ error: "Class not found" });
+
+    cls.students.forEach(student => {
+      if (attendanceMap[student.regNo] !== undefined) {
+        student.attendance = attendanceMap[student.regNo];
+      }
+    });
+
+    await cls.save();
+    res.json({ message: "Attendance saved successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
