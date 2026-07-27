@@ -16,6 +16,7 @@ const letterTemplateSchema = new mongoose.Schema({
   signatureMiddle: { type: String, default: "HOD" },
   signatureRight: { type: String, default: "PRINCIPAL" },
   letterDate: { type: String, default: "" },
+  attendanceSourceExam: { type: String, default: "[Selected Exam]" },
   columns: {
     type: Array,
     default: [
