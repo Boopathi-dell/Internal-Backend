@@ -1,11 +1,10 @@
 const express = require("express");
 const Roster = require("../models/Roster");
-const authMiddleware = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
 // Get all rosters
-router.get("/", authMiddleware, async (req, res) => {
+router.get("/", async (req, res) => {
   try {
     const rosters = await Roster.find();
     res.json(rosters);
@@ -15,7 +14,7 @@ router.get("/", authMiddleware, async (req, res) => {
 });
 
 // Save or Update a Roster
-router.post("/", authMiddleware, async (req, res) => {
+router.post("/", async (req, res) => {
   const { cohortName, programme, department, year, semester, section, students } = req.body;
   if (!cohortName) return res.status(400).json({ error: "Cohort name is required" });
 
@@ -51,7 +50,7 @@ router.post("/", authMiddleware, async (req, res) => {
 });
 
 // Delete a Roster
-router.delete("/:cohortName", authMiddleware, async (req, res) => {
+router.delete("/:cohortName", async (req, res) => {
   try {
     const result = await Roster.findOneAndDelete({ cohortName: req.params.cohortName });
     if (!result) return res.status(404).json({ error: "Roster not found" });
