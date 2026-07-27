@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 
 const letterTemplateSchema = new mongoose.Schema({
+  headerLogo: { type: String, default: "" },
   iqacNo: { type: String, default: "MEC/IQAC/2026-27/COE/" },
   examDescription: { type: String, default: "End Semester Examination - April/May-2026" },
   collegeTamilName: { type: String, default: "முத்தாயம்மால் பொறியியல் கல்லூரி, இராசிபுரம் – 637 408" },
