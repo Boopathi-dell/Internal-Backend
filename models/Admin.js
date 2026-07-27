@@ -6,7 +6,8 @@ const adminSchema = new mongoose.Schema({
   role: { type: String, enum: ['admin', 'printAdmin'], default: 'admin' },
   securityCode: { type: String, default: "" },
   securityQuestion: { type: String, default: "" },
-  securityAnswer: { type: String, default: "" }
+  securityAnswer: { type: String, default: "" },
+  printEditAccess: { type: Boolean, default: false }
 });
 
 module.exports = mongoose.model("Admin", adminSchema);

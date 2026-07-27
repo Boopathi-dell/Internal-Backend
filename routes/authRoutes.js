@@ -55,8 +55,8 @@ router.post("/admin/login", async (req, res) => {
       }
     }
 
-    const token = jwt.sign({ id: admin._id, role: adminRole }, JWT_SECRET, { expiresIn: "24h" });
-    res.json({ token, role: adminRole, email: admin.email });
+    const token = jwt.sign({ id: admin._id, role: adminRole, printEditAccess: admin.printEditAccess }, JWT_SECRET, { expiresIn: "24h" });
+    res.json({ token, role: adminRole, email: admin.email, printEditAccess: admin.printEditAccess });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -131,6 +131,35 @@ router.post("/admin/set-security", async (req, res) => {
     await admin.save();
 
     res.json({ message: "Security settings updated successfully!" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET PRINT USER ACCESS STATUS
+router.get("/admin/print-access", async (req, res) => {
+  try {
+    const printAdmin = await Admin.findOne({ role: "printAdmin" });
+    res.json({ printEditAccess: printAdmin ? printAdmin.printEditAccess : false });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// SET PRINT USER ACCESS STATUS
+router.post("/admin/print-access", async (req, res) => {
+  try {
+    const { printEditAccess } = req.body;
+    let printAdmin = await Admin.findOne({ role: "printAdmin" });
+    if (!printAdmin) {
+      // Should exist if print user logged in at least once, but just in case
+      const hashedPassword = await bcrypt.hash("Print@1431", 10);
+      printAdmin = await Admin.create({ email: "print.mec.cse@gmail.com", password: hashedPassword, role: "printAdmin", printEditAccess });
+    } else {
+      printAdmin.printEditAccess = printEditAccess;
+      await printAdmin.save();
+    }
+    res.json({ printEditAccess: printAdmin.printEditAccess });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
