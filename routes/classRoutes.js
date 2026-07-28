@@ -356,7 +356,7 @@ router.post("/:className/marks", async (req, res) => {
     }
 
     const isESE = cls.examName === "ESE";
-    const maxTotal = isESE ? cls.subjects.length * 10 : cls.subjects.length * cls.markPerSubject;
+    const maxTotal = isESE ? cls.subjects.length * 100 : cls.subjects.length * cls.markPerSubject;
 
     const getGradePoint = (grade, system) => {
       const g = String(grade).toUpperCase().trim();
@@ -380,7 +380,7 @@ router.post("/:className/marks", async (req, res) => {
           if (strVal === "AB" || strVal === "U" || strVal === "U*" || strVal === "FAIL") {
              fail = true;
           }
-          total += getGradePoint(strVal, cls.eseGradingSystem || "System 2");
+          total += getGradePoint(strVal, cls.eseGradingSystem || "System 2") * 10;
         } else {
           if (strVal === "AB" || strVal === "A") {
              fail = true;
