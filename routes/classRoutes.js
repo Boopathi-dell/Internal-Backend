@@ -393,9 +393,6 @@ router.post("/:className/marks", async (req, res) => {
       });
 
       let percentage = maxTotal > 0 ? (total / maxTotal) * 100 : 0;
-      if (isESE && maxTotal > 0) {
-        percentage = total / cls.subjects.length; // SGPA out of 10 for ESE
-      }
 
       return {
         ...s,
