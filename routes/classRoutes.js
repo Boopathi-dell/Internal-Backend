@@ -371,6 +371,8 @@ router.post("/:className/marks", async (req, res) => {
 
     const computedStudents = students.map(s => {
       let total = 0;
+      let totalGradePoints = 0;
+      let totalCredits = 0;
       let fail = false;
 
       const marks = s.marks || [];
@@ -380,7 +382,10 @@ router.post("/:className/marks", async (req, res) => {
           if (strVal === "AB" || strVal === "U" || strVal === "U*" || strVal === "FAIL") {
              fail = true;
           }
-          // Total marks are not calculated for ESE (kept at 0 like before)
+          const gp = getGradePoint(strVal, cls.eseGradingSystem || "System 2");
+          const credits = (cls.courseDetails && cls.courseDetails[idx] && cls.courseDetails[idx].credits !== undefined) ? Number(cls.courseDetails[idx].credits) : 3;
+          totalGradePoints += (gp * credits);
+          totalCredits += credits;
         } else {
           if (strVal === "AB" || strVal === "A") {
              fail = true;
@@ -395,7 +400,7 @@ router.post("/:className/marks", async (req, res) => {
       let percentage = maxTotal > 0 ? (total / maxTotal) * 100 : 0;
       if (isESE) {
         percentage = 0;
-        total = 0;
+        total = totalCredits > 0 ? Number((totalGradePoints / totalCredits).toFixed(2)) : 0;
       }
 
       return {

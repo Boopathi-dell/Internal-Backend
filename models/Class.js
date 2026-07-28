@@ -17,7 +17,8 @@ const courseDetailSchema = new mongoose.Schema({
   courseCode: String,
   courseName: String,
   shortName: String,
-  facultyName: String
+  facultyName: String,
+  credits: { type: Number, default: 3 }
 });
 
 const classSchema = new mongoose.Schema({
