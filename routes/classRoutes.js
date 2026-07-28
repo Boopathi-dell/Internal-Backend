@@ -355,7 +355,19 @@ router.post("/:className/marks", async (req, res) => {
       }
     }
 
-    const maxTotal = cls.subjects.length * cls.markPerSubject;
+    const isESE = cls.examName === "ESE";
+    const maxTotal = isESE ? cls.subjects.length * 10 : cls.subjects.length * cls.markPerSubject;
+
+    const getGradePoint = (grade, system) => {
+      const g = String(grade).toUpperCase().trim();
+      if (system === "System 1") {
+        const map = { "S": 10, "A+": 9, "A": 8, "B+": 7, "B": 6.5, "C+": 6, "C": 5, "U": 0, "U*": 0 };
+        return map[g] !== undefined ? map[g] : 0;
+      } else {
+        const map = { "O": 10, "A+": 9, "A": 8, "B+": 7, "B": 6, "C": 5, "U": 0, "U*": 0 };
+        return map[g] !== undefined ? map[g] : 0;
+      }
+    };
 
     const computedStudents = students.map(s => {
       let total = 0;
@@ -363,17 +375,27 @@ router.post("/:className/marks", async (req, res) => {
 
       const marks = s.marks || [];
       marks.forEach((val, idx) => {
-        const strVal = String(val || "").toUpperCase();
-        if (strVal === "AB" || strVal === "A") {
-           fail = true;
+        const strVal = String(val || "").toUpperCase().trim();
+        if (isESE) {
+          if (strVal === "AB" || strVal === "U" || strVal === "U*" || strVal === "FAIL") {
+             fail = true;
+          }
+          total += getGradePoint(strVal, cls.eseGradingSystem || "System 2");
         } else {
-          const numVal = Number(strVal || 0);
-          total += (isNaN(numVal) ? 0 : numVal);
-          if (numVal < cls.passMark) fail = true;
+          if (strVal === "AB" || strVal === "A") {
+             fail = true;
+          } else {
+            const numVal = Number(strVal || 0);
+            total += (isNaN(numVal) ? 0 : numVal);
+            if (numVal < cls.passMark) fail = true;
+          }
         }
       });
 
-      const percentage = maxTotal > 0 ? (total / maxTotal) * 100 : 0;
+      let percentage = maxTotal > 0 ? (total / maxTotal) * 100 : 0;
+      if (isESE && maxTotal > 0) {
+        percentage = total / cls.subjects.length; // SGPA out of 10 for ESE
+      }
 
       return {
         ...s,

@@ -38,6 +38,7 @@ const classSchema = new mongoose.Schema({
   editingEndDate: { type: String, default: "" },
   editingStartTime: { type: String, default: "" },
   editingEndTime: { type: String, default: "" },
+  eseGradingSystem: { type: String, default: "System 2" },
   semesterProgress: {
     type: Map,
     of: new mongoose.Schema({
