@@ -356,7 +356,7 @@ router.post("/:className/marks", async (req, res) => {
     }
 
     const isESE = cls.examName === "ESE";
-    const maxTotal = isESE ? cls.subjects.length * 100 : cls.subjects.length * cls.markPerSubject;
+    const maxTotal = isESE ? cls.subjects.length * 10 : cls.subjects.length * cls.markPerSubject;
 
     const getGradePoint = (grade, system) => {
       const g = String(grade).toUpperCase().trim();
@@ -380,7 +380,7 @@ router.post("/:className/marks", async (req, res) => {
           if (strVal === "AB" || strVal === "U" || strVal === "U*" || strVal === "FAIL") {
              fail = true;
           }
-          total += getGradePoint(strVal, cls.eseGradingSystem || "System 2") * 10;
+          // Total marks are not calculated for ESE (kept at 0 like before)
         } else {
           if (strVal === "AB" || strVal === "A") {
              fail = true;
@@ -393,12 +393,16 @@ router.post("/:className/marks", async (req, res) => {
       });
 
       let percentage = maxTotal > 0 ? (total / maxTotal) * 100 : 0;
+      if (isESE) {
+        percentage = 0;
+        total = 0;
+      }
 
       return {
         ...s,
         marks: marks,
         total,
-        percentage: Math.round(percentage),
+        percentage: Number(percentage.toFixed(2)),
         result: fail ? "Fail" : "Pass"
       };
     });
