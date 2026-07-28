@@ -398,7 +398,7 @@ router.post("/:className/marks", async (req, res) => {
         ...s,
         marks: marks,
         total,
-        percentage: Number(percentage.toFixed(2)),
+        percentage: Math.round(percentage),
         result: fail ? "Fail" : "Pass"
       };
     });
