@@ -283,7 +283,13 @@ router.post("/", async (req, res) => {
         });
         for (const otherCls of otherYearSemClasses) {
           if (courseDetails && courseDetails.length > 0) {
-            otherCls.courseDetails = courseDetails;
+            otherCls.courseDetails = courseDetails.map(newCd => {
+              const existingCd = otherCls.courseDetails?.find(oldCd => oldCd.courseCode === newCd.courseCode);
+              return {
+                ...newCd,
+                facultyName: existingCd ? existingCd.facultyName : ""
+              };
+            });
             otherCls.subjects = courseDetails.map(cd => cd.courseCode || "");
           }
           if (date !== undefined) otherCls.date = date;
@@ -335,7 +341,13 @@ router.post("/", async (req, res) => {
         });
         for (const otherCls of otherYearSemClasses) {
           if (courseDetails && courseDetails.length > 0) {
-            otherCls.courseDetails = courseDetails;
+            otherCls.courseDetails = courseDetails.map(newCd => {
+              const existingCd = otherCls.courseDetails?.find(oldCd => oldCd.courseCode === newCd.courseCode);
+              return {
+                ...newCd,
+                facultyName: existingCd ? existingCd.facultyName : ""
+              };
+            });
             otherCls.subjects = courseDetails.map(cd => cd.courseCode || "");
           }
           if (date !== undefined) otherCls.date = date;
