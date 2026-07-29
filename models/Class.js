@@ -49,6 +49,9 @@ const classSchema = new mongoose.Schema({
     }, { _id: false }),
     default: {}
   },
+  iqacPrefix: { type: String, default: "MEC/IQAC/2026-27/COE/" },
+  academicYearText: { type: String, default: " (2026-27)" },
+  actionTakenSubjects: { type: [String], default: [] },
   isDeleted: { type: Boolean, default: false },
   deletedAt: { type: Date, default: null }
 });

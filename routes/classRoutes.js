@@ -399,15 +399,15 @@ router.post("/:className/marks", async (req, res) => {
 
       let percentage = maxTotal > 0 ? (total / maxTotal) * 100 : 0;
       if (isESE) {
-        percentage = 0;
         total = totalCredits > 0 ? Number((totalGradePoints / totalCredits).toFixed(2)) : 0;
+        percentage = Math.round(total * 10);
       }
 
       return {
         ...s,
         marks: marks,
         total,
-        percentage: Number(percentage.toFixed(2)),
+        percentage: Math.round(percentage),
         result: fail ? "Fail" : "Pass"
       };
     });
@@ -462,6 +462,24 @@ router.post("/:className/attendance", async (req, res) => {
 
     await cls.save();
     res.json({ message: "Attendance saved successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// UPDATE REPORT SETTINGS FOR A CLASS
+router.put("/:id/report-settings", async (req, res) => {
+  try {
+    const { iqacPrefix, academicYearText, actionTakenSubjects } = req.body;
+    const cls = await ClassData.findById(req.params.id);
+    if (!cls) return res.status(404).json({ error: "Class not found" });
+
+    if (iqacPrefix !== undefined) cls.iqacPrefix = iqacPrefix;
+    if (academicYearText !== undefined) cls.academicYearText = academicYearText;
+    if (actionTakenSubjects !== undefined) cls.actionTakenSubjects = actionTakenSubjects;
+
+    await cls.save();
+    res.json({ message: "Report settings updated successfully", class: cls });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
