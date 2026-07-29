@@ -188,7 +188,7 @@ router.post("/roster", async (req, res) => {
 // CREATE OR UPDATE A CLASS (Admin Panel Data Setup)
 router.post("/", async (req, res) => {
   try {
-    const { className, subjects, passMark, examName, markPerSubject, students, courseDetails, targetPassPercentage, date, department, yearSemSec, programme, allowEditing, editingStartDate, editingEndDate, editingStartTime, editingEndTime, propagateRoster } = req.body;
+    const { className, subjects, passMark, examName, markPerSubject, students, courseDetails, targetPassPercentage, date, department, yearSemSec, programme, allowEditing, editingStartDate, editingEndDate, editingStartTime, editingEndTime, propagateRoster, propagateToYearSem } = req.body;
 
     // Purge any deleted class with the same name to prevent key collisions
     await ClassData.deleteOne({ className, isDeleted: true });
@@ -271,6 +271,26 @@ router.post("/", async (req, res) => {
         await propagateRosterToCohort(cls, students, courseDetails);
       }
 
+      if (propagateToYearSem) {
+        const yearSemPrefix = cls.yearSemSec.split('/').slice(0, 2).join('/');
+        const otherYearSemClasses = await ClassData.find({
+          programme: cls.programme,
+          department: cls.department,
+          examName: cls.examName,
+          yearSemSec: { $regex: `^${yearSemPrefix}/` },
+          _id: { $ne: cls._id },
+          isDeleted: { $ne: true }
+        });
+        for (const otherCls of otherYearSemClasses) {
+          if (courseDetails && courseDetails.length > 0) {
+            otherCls.courseDetails = courseDetails;
+            otherCls.subjects = courseDetails.map(cd => cd.courseCode || "");
+          }
+          if (date !== undefined) otherCls.date = date;
+          await otherCls.save();
+        }
+      }
+
       return res.json(cls);
     } else {
       // Create new
@@ -301,6 +321,26 @@ router.post("/", async (req, res) => {
 
       if (propagateRoster) {
         await propagateRosterToCohort(newClass, students, courseDetails);
+      }
+
+      if (propagateToYearSem) {
+        const yearSemPrefix = newClass.yearSemSec.split('/').slice(0, 2).join('/');
+        const otherYearSemClasses = await ClassData.find({
+          programme: newClass.programme,
+          department: newClass.department,
+          examName: newClass.examName,
+          yearSemSec: { $regex: `^${yearSemPrefix}/` },
+          _id: { $ne: newClass._id },
+          isDeleted: { $ne: true }
+        });
+        for (const otherCls of otherYearSemClasses) {
+          if (courseDetails && courseDetails.length > 0) {
+            otherCls.courseDetails = courseDetails;
+            otherCls.subjects = courseDetails.map(cd => cd.courseCode || "");
+          }
+          if (date !== undefined) otherCls.date = date;
+          await otherCls.save();
+        }
       }
 
       return res.json(newClass);
