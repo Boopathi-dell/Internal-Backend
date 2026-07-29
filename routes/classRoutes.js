@@ -188,7 +188,7 @@ router.post("/roster", async (req, res) => {
 // CREATE OR UPDATE A CLASS (Admin Panel Data Setup)
 router.post("/", async (req, res) => {
   try {
-    const { className, subjects, passMark, examName, markPerSubject, students, courseDetails, targetPassPercentage, date, department, yearSemSec, programme, allowEditing, editingStartDate, editingEndDate, editingStartTime, editingEndTime, propagateRoster, propagateToYearSem } = req.body;
+    const { className, subjects, passMark, examName, markPerSubject, students, courseDetails, targetPassPercentage, date, department, yearSemSec, programme, allowEditing, editingStartDate, editingEndDate, editingStartTime, editingEndTime, propagateRoster, propagateToYearSem, eseGradingSystem } = req.body;
 
     // Purge any deleted class with the same name to prevent key collisions
     await ClassData.deleteOne({ className, isDeleted: true });
@@ -253,6 +253,7 @@ router.post("/", async (req, res) => {
       if (editingEndDate !== undefined) cls.editingEndDate = editingEndDate;
       if (editingStartTime !== undefined) cls.editingStartTime = editingStartTime;
       if (editingEndTime !== undefined) cls.editingEndTime = editingEndTime;
+      if (eseGradingSystem !== undefined) cls.eseGradingSystem = eseGradingSystem;
       
       // Preserve existing marks for students that are kept, add new ones empty
       const updatedStudents = students.map(newStudent => {
@@ -293,6 +294,7 @@ router.post("/", async (req, res) => {
             otherCls.subjects = courseDetails.map(cd => cd.courseCode || "");
           }
           if (date !== undefined) otherCls.date = date;
+          if (eseGradingSystem !== undefined) otherCls.eseGradingSystem = eseGradingSystem;
           await otherCls.save();
         }
       }
@@ -321,7 +323,8 @@ router.post("/", async (req, res) => {
         editingStartDate: editingStartDate || "",
         editingEndDate: editingEndDate || "",
         editingStartTime: editingStartTime || "",
-        editingEndTime: editingEndTime || ""
+        editingEndTime: editingEndTime || "",
+        eseGradingSystem: eseGradingSystem || "System 2"
       });
       await newClass.save();
 
@@ -351,6 +354,7 @@ router.post("/", async (req, res) => {
             otherCls.subjects = courseDetails.map(cd => cd.courseCode || "");
           }
           if (date !== undefined) otherCls.date = date;
+          if (eseGradingSystem !== undefined) otherCls.eseGradingSystem = eseGradingSystem;
           await otherCls.save();
         }
       }
