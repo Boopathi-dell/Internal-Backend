@@ -1,5 +1,6 @@
 const express = require("express");
 const Roster = require("../models/Roster");
+const Class = require("../models/Class");
 
 const router = express.Router();
 
@@ -29,6 +30,34 @@ router.post("/", async (req, res) => {
       roster.semester = semester;
       roster.section = section;
       await roster.save();
+
+      // Sync changes to all existing classes for this cohort
+      const yearSemSec = `${year}/${semester}/${section}`;
+      const classesToUpdate = await Class.find({ programme, department, yearSemSec });
+      for (const cls of classesToUpdate) {
+        const oldStudentsMap = new Map();
+        cls.students.forEach(s => oldStudentsMap.set(s.regNo, s));
+        
+        const newStudents = students.map(rosterStudent => {
+          const oldStudent = oldStudentsMap.get(rosterStudent.regNo);
+          return {
+             regNo: rosterStudent.regNo,
+             name: rosterStudent.name,
+             dob: rosterStudent.dob,
+             gender: rosterStudent.gender,
+             studentType: rosterStudent.studentType,
+             marks: oldStudent ? oldStudent.marks : [],
+             total: oldStudent ? oldStudent.total : 0,
+             percentage: oldStudent ? oldStudent.percentage : 0,
+             result: oldStudent ? oldStudent.result : "-",
+             attendance: oldStudent ? oldStudent.attendance : ""
+          };
+        });
+        
+        cls.students = newStudents;
+        await cls.save();
+      }
+
       res.json({ message: "Roster updated successfully", roster });
     } else {
       // Create new
