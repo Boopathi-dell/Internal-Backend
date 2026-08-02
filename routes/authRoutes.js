@@ -136,6 +136,28 @@ router.post("/admin/set-security", async (req, res) => {
   }
 });
 
+// GET SECURITY (Protected Route)
+router.get("/admin/get-security", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).json({ error: "No token provided" });
+    const token = authHeader.split(" ")[1];
+    const decoded = jwt.verify(token, JWT_SECRET);
+    
+    const admin = await Admin.findById(decoded.id);
+    if (!admin) return res.status(404).json({ error: "Admin not found" });
+
+    res.json({
+      securityCode: admin.securityCode || "",
+      securityQuestion: admin.securityQuestion || "",
+      securityAnswer: admin.securityAnswer || ""
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
 // GET PRINT USER ACCESS STATUS
 router.get("/admin/print-access", async (req, res) => {
   try {
