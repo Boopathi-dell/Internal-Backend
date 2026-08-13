@@ -60,13 +60,19 @@ router.post("/generate", async (req, res) => {
     }
 
     // Fetch selected halls
-    const halls = await Hall.find({ _id: { $in: hallIds } }).sort({ hallNumber: 1 });
+    const halls = await Hall.find({ _id: { $in: hallIds } }).lean();
+    // Sort halls in the exact order of user selection
+    halls.sort((a, b) => hallIds.indexOf(a._id.toString()) - hallIds.indexOf(b._id.toString()));
+    
     if (halls.length === 0) {
       return res.status(400).json({ error: "Selected halls not found." });
     }
 
     // Fetch students from selected rosters
-    const rosters = await Roster.find({ _id: { $in: rosterIds } });
+    const rosters = await Roster.find({ _id: { $in: rosterIds } }).lean();
+    // Sort rosters in the exact order of user selection
+    rosters.sort((a, b) => rosterIds.indexOf(a._id.toString()) - rosterIds.indexOf(b._id.toString()));
+
     if (rosters.length === 0) {
       return res.status(400).json({ error: "No valid cohorts selected." });
     }
