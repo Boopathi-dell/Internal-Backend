@@ -214,15 +214,17 @@ router.post("/generate", async (req, res) => {
       } else {
         // Standard Layout
         let studentsInThisHall = Math.min(totalStudents - studentsPlacedTotal, hall.totalCapacity);
-        let baseRows = Math.floor(studentsInThisHall / hall.columns);
-        let remainder = studentsInThisHall % hall.columns;
+        
+        // Calculate the physical max capacity of each column in this hall
+        let hallBaseRows = Math.floor(hall.totalCapacity / hall.columns);
+        let hallRemainder = hall.totalCapacity % hall.columns;
         
         let colCapacities = [];
         for (let i = 0; i < hall.columns; i++) {
-          if (i < remainder) {
-            colCapacities.push(baseRows + 1);
+          if (i < hallRemainder) {
+            colCapacities.push(hallBaseRows + 1);
           } else {
-            colCapacities.push(baseRows);
+            colCapacities.push(hallBaseRows);
           }
         }
 
