@@ -4,6 +4,7 @@ const seatingPlanSchema = new mongoose.Schema({
   examDate: { type: String, required: true },
   examName: { type: String, default: "" },
   academicYear: { type: String, default: "" },
+  branchName: { type: String, default: "CSE" },
   iqacNumber: { type: String, default: "" },
   halls: [{ type: mongoose.Schema.Types.ObjectId, ref: "Hall" }],
   // allocations will hold an array of objects.
