@@ -79,20 +79,20 @@ router.post("/generate", async (req, res) => {
       // Multiple years selected -> Group by Year
       rosters.forEach(r => {
         if (!groups[r.year]) groups[r.year] = [];
-        groups[r.year].push(...r.students.map(s => ({ regNo: s.regNo, branchYearSem: `${r.department}/${r.year}/${r.semester}` })));
+        groups[r.year].push(...r.students.map(s => ({ regNo: s.regNo, branchYearSem: `${r.department}/${r.year}/${r.semester}/${r.section}` })));
       });
     } else {
       // Single year selected
       if (shuffleClasses) {
         // Group by class/cohort (e.g. section)
         rosters.forEach(r => {
-          groups[r.cohortName] = r.students.map(s => ({ regNo: s.regNo, branchYearSem: `${r.department}/${r.year}/${r.semester}` }));
+          groups[r.cohortName] = r.students.map(s => ({ regNo: s.regNo, branchYearSem: `${r.department}/${r.year}/${r.semester}/${r.section}` }));
         });
       } else {
         // No shuffle, just sequential by cohort
         groups["All"] = [];
         rosters.forEach(r => {
-          groups["All"].push(...r.students.map(s => ({ regNo: s.regNo, branchYearSem: `${r.department}/${r.year}/${r.semester}` })));
+          groups["All"].push(...r.students.map(s => ({ regNo: s.regNo, branchYearSem: `${r.department}/${r.year}/${r.semester}/${r.section}` })));
         });
       }
     }
