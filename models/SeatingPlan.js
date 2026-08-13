@@ -16,7 +16,13 @@ const seatingPlanSchema = new mongoose.Schema({
     columnsData: [[String]],
     // Object containing computerTables and readingTables arrays (Library).
     libraryData: { type: mongoose.Schema.Types.Mixed },
-    summaryInfo: { type: String } // e.g., "CSE/II Year / III Sem - 40"
+    summaryInfo: { type: String }, // e.g., "CSE/II Year / III Sem - 40"
+    summaryRanges: [{
+      branch: { type: String },
+      range: { type: String },
+      count: { type: Number }
+    }],
+    totalAllocated: { type: Number }
   }],
 }, { timestamps: true });
 
