@@ -234,7 +234,7 @@ router.post("/generate", async (req, res) => {
         
         let colCapacities = [];
         for (let i = 0; i < hall.columns; i++) {
-          if (i < hallRemainder) {
+          if (i >= hall.columns - hallRemainder) {
             colCapacities.push(hallBaseRows + 1);
           } else {
             colCapacities.push(hallBaseRows);
