@@ -4,6 +4,7 @@ const seatingPlanSchema = new mongoose.Schema({
   examDate: { type: String, required: true },
   examName: { type: String, default: "" },
   academicYear: { type: String, default: "" },
+  subHeaderText: { type: String, default: "OFFICE OF THE CONTROLLER OF THE EXAMINATION" },
   branchName: { type: String, default: "CSE" },
   iqacNumber: { type: String, default: "" },
   halls: [{ type: mongoose.Schema.Types.ObjectId, ref: "Hall" }],
