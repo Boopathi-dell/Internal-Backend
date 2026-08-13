@@ -26,6 +26,19 @@ router.post("/halls", async (req, res) => {
   }
 });
 
+// Update a hall
+router.put("/halls/:id", async (req, res) => {
+  try {
+    const { hallNumber, totalCapacity, columns, layoutType } = req.body;
+    const hall = await Hall.findByIdAndUpdate(req.params.id, {
+      hallNumber, totalCapacity, columns, layoutType
+    }, { new: true });
+    res.json(hall);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // Delete a hall
 router.delete("/halls/:id", async (req, res) => {
   try {
@@ -321,6 +334,19 @@ router.get("/plans", async (req, res) => {
   try {
     const plans = await SeatingPlan.find().sort({ createdAt: -1 });
     res.json(plans);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update a saved plan (allocations)
+router.put("/plans/:id", async (req, res) => {
+  try {
+    const { allocations } = req.body;
+    const plan = await SeatingPlan.findByIdAndUpdate(req.params.id, {
+      allocations
+    }, { new: true });
+    res.json(plan);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
