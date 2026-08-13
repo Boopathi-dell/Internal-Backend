@@ -79,20 +79,20 @@ router.post("/generate", async (req, res) => {
       // Multiple years selected -> Group by Year
       rosters.forEach(r => {
         if (!groups[r.year]) groups[r.year] = [];
-        groups[r.year].push(...r.students.map(s => s.regNo));
+        groups[r.year].push(...r.students.map(s => ({ regNo: s.regNo, branchYearSem: `${r.department}/${r.year}/${r.semester}` })));
       });
     } else {
       // Single year selected
       if (shuffleClasses) {
         // Group by class/cohort (e.g. section)
         rosters.forEach(r => {
-          groups[r.cohortName] = r.students.map(s => s.regNo);
+          groups[r.cohortName] = r.students.map(s => ({ regNo: s.regNo, branchYearSem: `${r.department}/${r.year}/${r.semester}` }));
         });
       } else {
         // No shuffle, just sequential by cohort
         groups["All"] = [];
         rosters.forEach(r => {
-          groups["All"].push(...r.students.map(s => s.regNo));
+          groups["All"].push(...r.students.map(s => ({ regNo: s.regNo, branchYearSem: `${r.department}/${r.year}/${r.semester}` })));
         });
       }
     }
@@ -115,7 +115,7 @@ router.post("/generate", async (req, res) => {
     for (let hall of halls) {
       if (studentIndex >= totalStudents) break; // All students allocated
       
-      const summaryInfo = rosters.map(r => `${r.department}/${r.year} Year / ${r.semester} Sem`).join(", ");
+      let allocatedStudentsForHall = [];
       
       if (hall.layoutType === 'Library') {
         let capacityLeft = 84; // Fixed library capacity
@@ -128,7 +128,9 @@ router.post("/generate", async (req, res) => {
             for (let c = 0; c < 6; c++) {
               for (let r = 0; r < 2; r++) {
                 if (studentIndex < totalStudents && computerTables[t][c][r] === "") {
-                  computerTables[t][c][r] = orderedStudents[studentIndex];
+                  let studentObj = orderedStudents[studentIndex];
+                  computerTables[t][c][r] = studentObj.regNo;
+                  allocatedStudentsForHall.push(studentObj);
                   studentIndex++;
                   capacityLeft--;
                 }
@@ -142,7 +144,9 @@ router.post("/generate", async (req, res) => {
             for (let c = 0; c < 2; c++) {
               for (let r = 0; r < 2; r++) {
                 if (studentIndex < totalStudents && readingTables[t][c][r] === "") {
-                  readingTables[t][c][r] = orderedStudents[studentIndex];
+                  let studentObj = orderedStudents[studentIndex];
+                  readingTables[t][c][r] = studentObj.regNo;
+                  allocatedStudentsForHall.push(studentObj);
                   studentIndex++;
                   capacityLeft--;
                 }
@@ -159,12 +163,28 @@ router.post("/generate", async (req, res) => {
           fillReading();
         }
 
+        // Compute ranges
+        let summaryRanges = [];
+        let grouped = {};
+        allocatedStudentsForHall.forEach(s => {
+           if (!grouped[s.branchYearSem]) grouped[s.branchYearSem] = [];
+           grouped[s.branchYearSem].push(s.regNo);
+        });
+        
+        for (let branch in grouped) {
+           let regs = grouped[branch].sort();
+           let count = regs.length;
+           let rangeStr = count > 1 ? `${regs[0]} - ${regs[count-1]}` : `${regs[0]}`;
+           summaryRanges.push({ branch, range: rangeStr, count });
+        }
+
         allocations.push({
           hallId: hall._id,
           hallNumber: hall.hallNumber,
           layoutType: 'Library',
           libraryData: { computerTables, readingTables },
-          summaryInfo: `${summaryInfo} - Total: ${84 - capacityLeft}`
+          summaryRanges,
+          totalAllocated: 84 - capacityLeft
         });
 
       } else {
@@ -177,7 +197,9 @@ router.post("/generate", async (req, res) => {
         
         // Fill column by column
         while (capacityLeft > 0 && studentIndex < totalStudents) {
-          hallColumnsData[colIndex].push(orderedStudents[studentIndex]);
+          let studentObj = orderedStudents[studentIndex];
+          hallColumnsData[colIndex].push(studentObj.regNo);
+          allocatedStudentsForHall.push(studentObj);
           studentIndex++;
           capacityLeft--;
           
@@ -186,12 +208,28 @@ router.post("/generate", async (req, res) => {
           }
         }
 
+        // Compute ranges
+        let summaryRanges = [];
+        let grouped = {};
+        allocatedStudentsForHall.forEach(s => {
+           if (!grouped[s.branchYearSem]) grouped[s.branchYearSem] = [];
+           grouped[s.branchYearSem].push(s.regNo);
+        });
+        
+        for (let branch in grouped) {
+           let regs = grouped[branch].sort();
+           let count = regs.length;
+           let rangeStr = count > 1 ? `${regs[0]} - ${regs[count-1]}` : `${regs[0]}`;
+           summaryRanges.push({ branch, range: rangeStr, count });
+        }
+
         allocations.push({
           hallId: hall._id,
           hallNumber: hall.hallNumber,
           layoutType: 'Standard',
           columnsData: hallColumnsData,
-          summaryInfo: `${summaryInfo} - Total: ${hall.totalCapacity - capacityLeft}`
+          summaryRanges,
+          totalAllocated: hall.totalCapacity - capacityLeft
         });
       }
     }
