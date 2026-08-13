@@ -17,8 +17,8 @@ router.get("/halls", async (req, res) => {
 // Create a hall
 router.post("/halls", async (req, res) => {
   try {
-    const { hallNumber, totalCapacity, columns } = req.body;
-    const hall = new Hall({ hallNumber, totalCapacity, columns });
+    const { hallNumber, totalCapacity, columns, layoutType } = req.body;
+    const hall = new Hall({ hallNumber, totalCapacity, columns, layoutType });
     await hall.save();
     res.json(hall);
   } catch (err) {
@@ -53,7 +53,7 @@ const interleaveArrays = (arrays) => {
 // Generate seating plan
 router.post("/generate", async (req, res) => {
   try {
-    const { date, iqacNumber, rosterIds, shuffleClasses } = req.body;
+    const { date, iqacNumber, examName, academicYear, rosterIds, shuffleClasses, libraryFillPreference } = req.body;
     
     // Fetch all available halls
     const halls = await Hall.find().sort({ hallNumber: 1 });
@@ -110,38 +110,90 @@ router.post("/generate", async (req, res) => {
 
     for (let hall of halls) {
       if (studentIndex >= totalStudents) break; // All students allocated
-
-      let rowsPerCol = Math.ceil(hall.totalCapacity / hall.columns);
-      let hallColumnsData = Array.from({ length: hall.columns }, () => []);
-
-      let capacityLeft = hall.totalCapacity;
-      let colIndex = 0;
       
-      // Fill column by column
-      while (capacityLeft > 0 && studentIndex < totalStudents) {
-        hallColumnsData[colIndex].push(orderedStudents[studentIndex]);
-        studentIndex++;
-        capacityLeft--;
-        
-        // Move to next column if current column is full
-        if (hallColumnsData[colIndex].length >= rowsPerCol) {
-          colIndex++;
-        }
-      }
-
-      // Generate a summary text for this hall
       const summaryInfo = rosters.map(r => `${r.department}/${r.year} Year / ${r.semester} Sem`).join(", ");
+      
+      if (hall.layoutType === 'Library') {
+        let capacityLeft = 84; // Fixed library capacity
+        
+        let computerTables = Array.from({ length: 5 }, () => Array.from({ length: 6 }, () => ["", ""])); // 5 tables, 6 cols, 2 rows
+        let readingTables = Array.from({ length: 6 }, () => Array.from({ length: 2 }, () => ["", ""])); // 6 tables, 2 cols, 2 rows
+        
+        const fillComputer = () => {
+          for (let t = 0; t < 5; t++) {
+            for (let c = 0; c < 6; c++) {
+              for (let r = 0; r < 2; r++) {
+                if (studentIndex < totalStudents && computerTables[t][c][r] === "") {
+                  computerTables[t][c][r] = orderedStudents[studentIndex];
+                  studentIndex++;
+                  capacityLeft--;
+                }
+              }
+            }
+          }
+        };
 
-      allocations.push({
-        hallId: hall._id,
-        hallNumber: hall.hallNumber,
-        columnsData: hallColumnsData,
-        summaryInfo: `${summaryInfo} - Total: ${hall.totalCapacity - capacityLeft}`
-      });
+        const fillReading = () => {
+          for (let t = 0; t < 6; t++) {
+            for (let c = 0; c < 2; c++) {
+              for (let r = 0; r < 2; r++) {
+                if (studentIndex < totalStudents && readingTables[t][c][r] === "") {
+                  readingTables[t][c][r] = orderedStudents[studentIndex];
+                  studentIndex++;
+                  capacityLeft--;
+                }
+              }
+            }
+          }
+        };
+
+        if (libraryFillPreference === 'Reading First') {
+          fillReading();
+          fillComputer();
+        } else {
+          fillComputer();
+          fillReading();
+        }
+
+        allocations.push({
+          hallId: hall._id,
+          hallNumber: hall.hallNumber,
+          layoutType: 'Library',
+          libraryData: { computerTables, readingTables },
+          summaryInfo: `${summaryInfo} - Total: ${84 - capacityLeft}`
+        });
+
+      } else {
+        // Standard Layout
+        let rowsPerCol = Math.ceil(hall.totalCapacity / hall.columns);
+        let hallColumnsData = Array.from({ length: hall.columns }, () => []);
+
+        let capacityLeft = hall.totalCapacity;
+        let colIndex = 0;
+        
+        // Fill column by column
+        while (capacityLeft > 0 && studentIndex < totalStudents) {
+          hallColumnsData[colIndex].push(orderedStudents[studentIndex]);
+          studentIndex++;
+          capacityLeft--;
+          
+          if (hallColumnsData[colIndex].length >= rowsPerCol) {
+            colIndex++;
+          }
+        }
+
+        allocations.push({
+          hallId: hall._id,
+          hallNumber: hall.hallNumber,
+          layoutType: 'Standard',
+          columnsData: hallColumnsData,
+          summaryInfo: `${summaryInfo} - Total: ${hall.totalCapacity - capacityLeft}`
+        });
+      }
     }
 
     // We don't save to DB immediately on generate, return preview to frontend
-    res.json({ examDate: date, iqacNumber, allocations });
+    res.json({ examDate: date, examName, academicYear, iqacNumber, allocations });
 
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -151,11 +203,13 @@ router.post("/generate", async (req, res) => {
 // Save a seating plan
 router.post("/plans", async (req, res) => {
   try {
-    const { examDate, iqacNumber, allocations } = req.body;
+    const { examDate, examName, academicYear, iqacNumber, allocations } = req.body;
     const hallIds = allocations.map(a => a.hallId);
     
     const plan = new SeatingPlan({
       examDate,
+      examName,
+      academicYear,
       iqacNumber,
       halls: hallIds,
       allocations
