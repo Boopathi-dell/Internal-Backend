@@ -103,23 +103,37 @@ router.post("/generate", async (req, res) => {
       }
     }
 
-    // Interleave the groups to create the final ordered list of students
-    const arraysToInterleave = Object.values(groups);
-    const orderedStudents = interleaveArrays(arraysToInterleave);
+    // Prepare cohort queues for dynamic allocation
+    let cohortQueues = Object.values(groups);
+    let cohortIndex = cohortQueues.length - 1; // start such that the first getNextStudent(true) picks index 0
+    let studentsPlacedTotal = 0;
+
+    // Helper to get next student dynamically
+    const getNextStudent = (changeCohort) => {
+        if (changeCohort) {
+            cohortIndex = (cohortIndex + 1) % cohortQueues.length;
+        }
+        let attempts = 0;
+        while (cohortQueues[cohortIndex].length === 0) {
+            cohortIndex = (cohortIndex + 1) % cohortQueues.length;
+            attempts++;
+            if (attempts >= cohortQueues.length) return null; // All empty
+        }
+        return cohortQueues[cohortIndex].shift();
+    };
 
     // Calculate total capacity required
-    const totalStudents = orderedStudents.length;
+    const totalStudents = cohortQueues.reduce((sum, q) => sum + q.length, 0);
     const totalHallCapacity = halls.reduce((sum, h) => sum + h.totalCapacity, 0);
     if (totalStudents > totalHallCapacity) {
       return res.status(400).json({ error: `Not enough hall capacity. Needed: ${totalStudents}, Available: ${totalHallCapacity}` });
     }
 
     // Allocate students to halls
-    let studentIndex = 0;
     const allocations = [];
 
     for (let hall of halls) {
-      if (studentIndex >= totalStudents) break; // All students allocated
+      if (studentsPlacedTotal >= totalStudents) break; // All students allocated
       
       let allocatedStudentsForHall = [];
       
@@ -133,12 +147,14 @@ router.post("/generate", async (req, res) => {
           for (let t = 0; t < 5; t++) {
             for (let c = 0; c < 6; c++) {
               for (let r = 0; r < 2; r++) {
-                if (studentIndex < totalStudents && computerTables[t][c][r] === "") {
-                  let studentObj = orderedStudents[studentIndex];
-                  computerTables[t][c][r] = studentObj.regNo;
-                  allocatedStudentsForHall.push(studentObj);
-                  studentIndex++;
-                  capacityLeft--;
+                if (studentsPlacedTotal < totalStudents && computerTables[t][c][r] === "") {
+                  let studentObj = getNextStudent(true); // alternate for every seat in library
+                  if (studentObj) {
+                    computerTables[t][c][r] = studentObj.regNo;
+                    allocatedStudentsForHall.push(studentObj);
+                    studentsPlacedTotal++;
+                    capacityLeft--;
+                  }
                 }
               }
             }
@@ -149,12 +165,14 @@ router.post("/generate", async (req, res) => {
           for (let t = 0; t < 6; t++) {
             for (let c = 0; c < 2; c++) {
               for (let r = 0; r < 2; r++) {
-                if (studentIndex < totalStudents && readingTables[t][c][r] === "") {
-                  let studentObj = orderedStudents[studentIndex];
-                  readingTables[t][c][r] = studentObj.regNo;
-                  allocatedStudentsForHall.push(studentObj);
-                  studentIndex++;
-                  capacityLeft--;
+                if (studentsPlacedTotal < totalStudents && readingTables[t][c][r] === "") {
+                  let studentObj = getNextStudent(true);
+                  if (studentObj) {
+                    readingTables[t][c][r] = studentObj.regNo;
+                    allocatedStudentsForHall.push(studentObj);
+                    studentsPlacedTotal++;
+                    capacityLeft--;
+                  }
                 }
               }
             }
@@ -195,7 +213,7 @@ router.post("/generate", async (req, res) => {
 
       } else {
         // Standard Layout
-        let studentsInThisHall = Math.min(totalStudents - studentIndex, hall.totalCapacity);
+        let studentsInThisHall = Math.min(totalStudents - studentsPlacedTotal, hall.totalCapacity);
         let baseRows = Math.floor(studentsInThisHall / hall.columns);
         let remainder = studentsInThisHall % hall.columns;
         
@@ -209,20 +227,33 @@ router.post("/generate", async (req, res) => {
         }
 
         let hallColumnsData = Array.from({ length: hall.columns }, () => []);
-        let colIndex = 0;
-        let studentsPlaced = 0;
+        let studentsPlacedInHall = 0;
         
         // Fill column by column based on calculated capacities
-        while (studentsPlaced < studentsInThisHall) {
-          let studentObj = orderedStudents[studentIndex];
-          hallColumnsData[colIndex].push(studentObj.regNo);
-          allocatedStudentsForHall.push(studentObj);
-          studentIndex++;
-          studentsPlaced++;
-          
-          if (hallColumnsData[colIndex].length >= colCapacities[colIndex]) {
-            colIndex++;
-          }
+        for (let c = 0; c < hall.columns; c++) {
+           if (studentsPlacedInHall >= studentsInThisHall) break;
+           
+           let cap = colCapacities[c];
+           // Start a new column with a new cohort
+           let studentObj = getNextStudent(true);
+           if (!studentObj) break;
+           
+           hallColumnsData[c].push(studentObj.regNo);
+           allocatedStudentsForHall.push(studentObj);
+           studentsPlacedInHall++;
+           studentsPlacedTotal++;
+           
+           // Fill the rest of the column with the same cohort
+           for (let i = 1; i < cap; i++) {
+              if (studentsPlacedInHall >= studentsInThisHall) break;
+              studentObj = getNextStudent(false);
+              if (!studentObj) break;
+              
+              hallColumnsData[c].push(studentObj.regNo);
+              allocatedStudentsForHall.push(studentObj);
+              studentsPlacedInHall++;
+              studentsPlacedTotal++;
+           }
         }
 
         // Compute ranges
@@ -246,7 +277,7 @@ router.post("/generate", async (req, res) => {
           layoutType: 'Standard',
           columnsData: hallColumnsData,
           summaryRanges,
-          totalAllocated: studentsPlaced
+          totalAllocated: studentsPlacedInHall
         });
       }
     }
