@@ -53,12 +53,16 @@ const interleaveArrays = (arrays) => {
 // Generate seating plan
 router.post("/generate", async (req, res) => {
   try {
-    const { date, iqacNumber, examName, academicYear, rosterIds, shuffleClasses, libraryFillPreference } = req.body;
+    const { date, iqacNumber, examName, academicYear, rosterIds, hallIds, shuffleClasses, libraryFillPreference } = req.body;
     
-    // Fetch all available halls
-    const halls = await Hall.find().sort({ hallNumber: 1 });
+    if (!hallIds || hallIds.length === 0) {
+      return res.status(400).json({ error: "No halls selected." });
+    }
+
+    // Fetch selected halls
+    const halls = await Hall.find({ _id: { $in: hallIds } }).sort({ hallNumber: 1 });
     if (halls.length === 0) {
-      return res.status(400).json({ error: "No halls available. Please add halls first." });
+      return res.status(400).json({ error: "Selected halls not found." });
     }
 
     // Fetch students from selected rosters
