@@ -195,21 +195,32 @@ router.post("/generate", async (req, res) => {
 
       } else {
         // Standard Layout
-        let rowsPerCol = Math.ceil(hall.totalCapacity / hall.columns);
-        let hallColumnsData = Array.from({ length: hall.columns }, () => []);
-
-        let capacityLeft = hall.totalCapacity;
-        let colIndex = 0;
+        let studentsInThisHall = Math.min(totalStudents - studentIndex, hall.totalCapacity);
+        let baseRows = Math.floor(studentsInThisHall / hall.columns);
+        let remainder = studentsInThisHall % hall.columns;
         
-        // Fill column by column
-        while (capacityLeft > 0 && studentIndex < totalStudents) {
+        let colCapacities = [];
+        for (let i = 0; i < hall.columns; i++) {
+          if (i >= hall.columns - remainder) {
+            colCapacities.push(baseRows + 1);
+          } else {
+            colCapacities.push(baseRows);
+          }
+        }
+
+        let hallColumnsData = Array.from({ length: hall.columns }, () => []);
+        let colIndex = 0;
+        let studentsPlaced = 0;
+        
+        // Fill column by column based on calculated capacities
+        while (studentsPlaced < studentsInThisHall) {
           let studentObj = orderedStudents[studentIndex];
           hallColumnsData[colIndex].push(studentObj.regNo);
           allocatedStudentsForHall.push(studentObj);
           studentIndex++;
-          capacityLeft--;
+          studentsPlaced++;
           
-          if (hallColumnsData[colIndex].length >= rowsPerCol) {
+          if (hallColumnsData[colIndex].length >= colCapacities[colIndex]) {
             colIndex++;
           }
         }
