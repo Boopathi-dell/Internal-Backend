@@ -246,7 +246,7 @@ router.post("/generate", async (req, res) => {
           layoutType: 'Standard',
           columnsData: hallColumnsData,
           summaryRanges,
-          totalAllocated: hall.totalCapacity - capacityLeft
+          totalAllocated: studentsPlaced
         });
       }
     }
