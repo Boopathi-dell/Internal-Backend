@@ -137,7 +137,11 @@ router.post("/generate", async (req, res) => {
 
     // Calculate total capacity required
     const totalStudents = cohortQueues.reduce((sum, q) => sum + q.length, 0);
-    const totalHallCapacity = halls.reduce((sum, h) => sum + h.totalCapacity, 0);
+    const totalHallCapacity = halls.reduce((sum, h) => {
+      if (h.layoutType === 'Library') return sum + 84;
+      if (h.layoutType === 'Library 2') return sum + 108;
+      return sum + (h.totalCapacity || 0);
+    }, 0);
     if (totalStudents > totalHallCapacity) {
       return res.status(400).json({ error: `Not enough hall capacity. Needed: ${totalStudents}, Available: ${totalHallCapacity}` });
     }
