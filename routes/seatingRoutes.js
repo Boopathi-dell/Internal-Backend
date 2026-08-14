@@ -118,21 +118,41 @@ router.post("/generate", async (req, res) => {
 
     // Prepare cohort queues for dynamic allocation
     let cohortQueues = Object.values(groups);
-    let cohortIndex = cohortQueues.length - 1; // start such that the first getNextStudent(true) picks index 0
     let studentsPlacedTotal = 0;
+
+    let activeIndices = [];
+    if (cohortQueues.length > 0) activeIndices.push(0);
+    if (cohortQueues.length > 1) activeIndices.push(1);
+    
+    let nextCohortIdx = 2; // Next cohort to pull from if one empties
+    let currentTurn = activeIndices.length > 1 ? 1 : 0;
 
     // Helper to get next student dynamically
     const getNextStudent = (changeCohort) => {
-        if (changeCohort) {
-            cohortIndex = (cohortIndex + 1) % cohortQueues.length;
+        if (activeIndices.length === 0) return null;
+
+        if (changeCohort && activeIndices.length > 1) {
+            currentTurn = (currentTurn + 1) % activeIndices.length;
+        } else if (currentTurn >= activeIndices.length) {
+            currentTurn = 0;
         }
-        let attempts = 0;
-        while (cohortQueues[cohortIndex].length === 0) {
-            cohortIndex = (cohortIndex + 1) % cohortQueues.length;
-            attempts++;
-            if (attempts >= cohortQueues.length) return null; // All empty
+
+        let idx = activeIndices[currentTurn];
+        
+        while (idx !== undefined && cohortQueues[idx].length === 0) {
+            if (nextCohortIdx < cohortQueues.length) {
+                activeIndices[currentTurn] = nextCohortIdx;
+                idx = nextCohortIdx;
+                nextCohortIdx++;
+            } else {
+                activeIndices.splice(currentTurn, 1);
+                if (activeIndices.length === 0) return null;
+                if (currentTurn >= activeIndices.length) currentTurn = 0;
+                idx = activeIndices[currentTurn];
+            }
         }
-        return cohortQueues[cohortIndex].shift();
+
+        return cohortQueues[idx].shift();
     };
 
     // Calculate total capacity required
