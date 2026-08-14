@@ -63,6 +63,40 @@ const interleaveArrays = (arrays) => {
   return result;
 };
 
+// Helper function to group students into summary ranges (splits different formats like regular and LE)
+const computeRanges = (allocatedStudents) => {
+  let summaryRanges = [];
+  let grouped = {};
+  allocatedStudents.forEach(s => {
+     if (!grouped[s.branchYearSem]) grouped[s.branchYearSem] = [];
+     grouped[s.branchYearSem].push(s.regNo);
+  });
+  
+  for (let branch in grouped) {
+     let regs = grouped[branch].sort();
+     
+     let subGroups = {};
+     regs.forEach(reg => {
+       const match = reg.match(/^(.*?)(\d+)$/);
+       const prefix = match ? match[1] : 'default';
+       if (!subGroups[prefix]) subGroups[prefix] = [];
+       subGroups[prefix].push(reg);
+     });
+     
+     let parts = [];
+     for (let prefix in subGroups) {
+       let subRegs = subGroups[prefix];
+       let subCount = subRegs.length;
+       parts.push(subCount > 1 ? `${subRegs[0]} - ${subRegs[subCount-1]}` : `${subRegs[0]}`);
+     }
+     
+     let rangeStr = parts.join(", ");
+     let count = regs.length;
+     summaryRanges.push({ branch, range: rangeStr, count });
+  }
+  return summaryRanges;
+};
+
 // Generate seating plan
 router.post("/generate", async (req, res) => {
   try {
@@ -233,19 +267,7 @@ router.post("/generate", async (req, res) => {
         }
 
         // Compute ranges
-        let summaryRanges = [];
-        let grouped = {};
-        allocatedStudentsForHall.forEach(s => {
-           if (!grouped[s.branchYearSem]) grouped[s.branchYearSem] = [];
-           grouped[s.branchYearSem].push(s.regNo);
-        });
-        
-        for (let branch in grouped) {
-           let regs = grouped[branch].sort();
-           let count = regs.length;
-           let rangeStr = count > 1 ? `${regs[0]} - ${regs[count-1]}` : `${regs[0]}`;
-           summaryRanges.push({ branch, range: rangeStr, count });
-        }
+        let summaryRanges = computeRanges(allocatedStudentsForHall);
 
         allocations.push({
           hallId: hall._id,
@@ -304,19 +326,7 @@ router.post("/generate", async (req, res) => {
         }
 
         // Compute ranges
-        let summaryRanges = [];
-        let grouped = {};
-        allocatedStudentsForHall.forEach(s => {
-           if (!grouped[s.branchYearSem]) grouped[s.branchYearSem] = [];
-           grouped[s.branchYearSem].push(s.regNo);
-        });
-        
-        for (let branch in grouped) {
-           let regs = grouped[branch].sort();
-           let count = regs.length;
-           let rangeStr = count > 1 ? `${regs[0]} - ${regs[count-1]}` : `${regs[0]}`;
-           summaryRanges.push({ branch, range: rangeStr, count });
-        }
+        let summaryRanges = computeRanges(allocatedStudentsForHall);
 
         allocations.push({
           hallId: hall._id,
