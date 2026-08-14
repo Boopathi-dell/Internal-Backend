@@ -66,7 +66,7 @@ const interleaveArrays = (arrays) => {
 // Generate seating plan
 router.post("/generate", async (req, res) => {
   try {
-    const { date, iqacNumber, examName, academicYear, branchName, subHeaderText, rosterIds, hallIds, shuffleClasses, libraryFillPreference } = req.body;
+    const { date, iqacNumber, examName, academicYear, branchName, subHeaderText, rosterIds, hallIds, shuffleClasses, libraryFillPreference, excludedStudents = [] } = req.body;
     
     if (!hallIds || hallIds.length === 0) {
       return res.status(400).json({ error: "No halls selected." });
@@ -88,6 +88,13 @@ router.post("/generate", async (req, res) => {
 
     if (rosters.length === 0) {
       return res.status(400).json({ error: "No valid cohorts selected." });
+    }
+
+    // Filter out excluded students
+    if (excludedStudents && excludedStudents.length > 0) {
+      rosters.forEach(r => {
+        r.students = r.students.filter(s => !excludedStudents.includes(s.regNo));
+      });
     }
 
     // Determine grouping strategy for shuffling
