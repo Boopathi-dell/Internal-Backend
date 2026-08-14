@@ -150,11 +150,12 @@ router.post("/generate", async (req, res) => {
       
       let allocatedStudentsForHall = [];
       
-      if (hall.layoutType === 'Library') {
-        let capacityLeft = 84; // Fixed library capacity
+      if (hall.layoutType === 'Library' || hall.layoutType === 'Library 2') {
+        let isModel2 = hall.layoutType === 'Library 2';
+        let capacityLeft = isModel2 ? 108 : 84; 
         
         let computerTables = Array.from({ length: 5 }, () => Array.from({ length: 6 }, () => ["", ""])); // 5 tables, 6 cols, 2 rows
-        let readingTables = Array.from({ length: 6 }, () => Array.from({ length: 2 }, () => ["", ""])); // 6 tables, 2 cols, 2 rows
+        let readingTables = Array.from({ length: 6 }, () => Array.from({ length: isModel2 ? 4 : 2 }, () => ["", ""])); // 6 tables, 4 or 2 cols, 2 rows
         
         const fillComputer = () => {
           for (let t = 0; t < 5; t++) {
@@ -176,7 +177,7 @@ router.post("/generate", async (req, res) => {
 
         const fillReading = () => {
           for (let t = 0; t < 6; t++) {
-            for (let c = 0; c < 2; c++) {
+            for (let c = 0; c < (isModel2 ? 4 : 2); c++) {
               for (let r = 0; r < 2; r++) {
                 if (studentsPlacedTotal < totalStudents && readingTables[t][c][r] === "") {
                   let studentObj = getNextStudent(true);
@@ -218,10 +219,10 @@ router.post("/generate", async (req, res) => {
         allocations.push({
           hallId: hall._id,
           hallNumber: hall.hallNumber,
-          layoutType: 'Library',
+          layoutType: hall.layoutType,
           libraryData: { computerTables, readingTables },
           summaryRanges,
-          totalAllocated: 84 - capacityLeft
+          totalAllocated: (isModel2 ? 108 : 84) - capacityLeft
         });
 
       } else {
