@@ -196,7 +196,7 @@ router.post("/user/register", async (req, res) => {
     if (existingUser) return res.status(400).json({ error: "Email already registered" });
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const user = new User({ name, email, department, designation, password: hashedPassword });
+    const user = new User({ name, email, department, designation, password: hashedPassword, plainPassword: password });
     await user.save();
 
     res.json({ message: "Registration successful! Waiting for admin approval." });

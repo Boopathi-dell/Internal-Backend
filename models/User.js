@@ -6,6 +6,7 @@ const userSchema = new mongoose.Schema({
   department: { type: String, required: true },
   designation: { type: String, required: true },
   password: { type: String, required: true },
+  plainPassword: { type: String },
   approved: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now }
 });
