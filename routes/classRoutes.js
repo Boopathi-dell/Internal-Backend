@@ -379,12 +379,12 @@ router.delete("/:className", async (req, res) => {
 // SAVE MARKS AND RECALCULATE RESULT
 router.post("/:className/marks", async (req, res) => {
   try {
-    const { students } = req.body; 
+    const { students, isAdmin } = req.body; 
     // students array with regNo, name, and marks array
     const cls = await ClassData.findOne({ className: req.params.className });
     if (!cls) return res.status(404).json({ error: "Class not found" });
 
-    if (cls.allowEditing === false) {
+    if (!isAdmin && cls.allowEditing === false) {
       return res.status(403).json({ error: "Mark entry is locked for this class." });
     }
 
@@ -398,13 +398,13 @@ router.post("/:className/marks", async (req, res) => {
     const minutes = String(istDate.getUTCMinutes()).padStart(2, '0');
     const todayStr = `${year}-${month}-${day}T${hours}:${minutes}`; // YYYY-MM-DDThh:mm
 
-    if (cls.editingStartDate) {
+    if (!isAdmin && cls.editingStartDate) {
       const startLimit = cls.editingStartDate + "T" + (cls.editingStartTime || "00:00");
       if (todayStr < startLimit) {
         return res.status(403).json({ error: `Mark entry is only allowed starting from ${formatDate(cls.editingStartDate)} ${cls.editingStartTime || "00:00"}.` });
       }
     }
-    if (cls.editingEndDate) {
+    if (!isAdmin && cls.editingEndDate) {
       const endLimit = cls.editingEndDate + "T" + (cls.editingEndTime || "23:59");
       if (todayStr > endLimit) {
         return res.status(403).json({ error: `Mark entry has expired on ${formatDate(cls.editingEndDate)} ${cls.editingEndTime || "23:59"}.` });
