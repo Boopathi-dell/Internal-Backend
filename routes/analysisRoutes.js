@@ -46,7 +46,14 @@ router.get("/department", async (req, res) => {
         totalStudents,
         passedStudents,
         failedStudents,
-        passPercentage
+        passPercentage,
+        students: cls.students,
+        subjects: cls.subjects,
+        courseDetails: cls.courseDetails,
+        examName: cls.examName,
+        passMark: cls.passMark,
+        markPerSubject: cls.markPerSubject,
+        eseGradingSystem: cls.eseGradingSystem
       };
     });
 
