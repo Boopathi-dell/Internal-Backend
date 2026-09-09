@@ -7,6 +7,10 @@ const seatingPlanSchema = new mongoose.Schema({
   subHeaderText: { type: String, default: "OFFICE OF THE CONTROLLER OF THE EXAMINATION" },
   branchName: { type: String, default: "CSE" },
   iqacNumber: { type: String, default: "" },
+  session: { type: String, default: "FN" },
+  time: { type: String, default: "" },
+  showEcSignature: { type: Boolean, default: true },
+  showHodSignature: { type: Boolean, default: true },
   halls: [{ type: mongoose.Schema.Types.ObjectId, ref: "Hall" }],
   // allocations will hold an array of objects.
   // Each object corresponds to a Hall and contains the arranged register numbers.

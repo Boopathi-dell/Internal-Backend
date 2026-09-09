@@ -100,7 +100,7 @@ const computeRanges = (allocatedStudents) => {
 // Generate seating plan
 router.post("/generate", async (req, res) => {
   try {
-    const { date, iqacNumber, examName, academicYear, branchName, subHeaderText, rosterIds, hallIds, shuffleClasses, libraryFillPreference, excludedStudents = [] } = req.body;
+    const { date, iqacNumber, examName, academicYear, branchName, subHeaderText, session, time, showEcSignature, showHodSignature, rosterIds, hallIds, shuffleClasses, libraryFillPreference, excludedStudents = [] } = req.body;
     
     if (!hallIds || hallIds.length === 0) {
       return res.status(400).json({ error: "No halls selected." });
@@ -340,7 +340,7 @@ router.post("/generate", async (req, res) => {
     }
 
     // We don't save to DB immediately on generate, return preview to frontend
-    res.json({ examDate: date, examName, academicYear, branchName, subHeaderText, iqacNumber, allocations });
+    res.json({ examDate: date, examName, academicYear, branchName, subHeaderText, iqacNumber, session, time, showEcSignature, showHodSignature, allocations });
 
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -350,7 +350,7 @@ router.post("/generate", async (req, res) => {
 // Save a seating plan
 router.post("/plans", async (req, res) => {
   try {
-    const { examDate, examName, academicYear, branchName, subHeaderText, iqacNumber, allocations } = req.body;
+    const { examDate, examName, academicYear, branchName, subHeaderText, iqacNumber, session, time, showEcSignature, showHodSignature, allocations } = req.body;
     const hallIds = allocations.map(a => a.hallId);
     
     const plan = new SeatingPlan({
@@ -360,6 +360,10 @@ router.post("/plans", async (req, res) => {
       branchName,
       subHeaderText,
       iqacNumber,
+      session,
+      time,
+      showEcSignature,
+      showHodSignature,
       halls: hallIds,
       allocations
     });
