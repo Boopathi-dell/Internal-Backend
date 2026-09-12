@@ -9,6 +9,7 @@ const userSchema = new mongoose.Schema({
   plainPassword: { type: String },
   approved: { type: Boolean, default: false },
   adminTabs: { type: [String], default: [] },
+  dashboardTabs: { type: [String], default: [] },
   createdAt: { type: Date, default: Date.now }
 });
 

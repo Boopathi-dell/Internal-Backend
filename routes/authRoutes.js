@@ -261,7 +261,7 @@ router.post("/user/login", async (req, res) => {
     if (!isMatch) return res.status(401).json({ error: "Invalid credentials" });
 
     const token = jwt.sign(
-      { id: user._id, role: "user", email: user.email, name: user.name, department: user.department, designation: user.designation, adminTabs: user.adminTabs },
+      { id: user._id, role: "user", email: user.email, name: user.name, department: user.department, designation: user.designation, adminTabs: user.adminTabs, dashboardTabs: user.dashboardTabs },
       JWT_SECRET,
       { expiresIn: "24h" }
     );
@@ -274,7 +274,7 @@ router.post("/user/login", async (req, res) => {
       details: `${user.name} logged in`
     }).save();
 
-    res.json({ token, role: "user", name: user.name, department: user.department, designation: user.designation, adminTabs: user.adminTabs, userId: user._id });
+    res.json({ token, role: "user", name: user.name, department: user.department, designation: user.designation, adminTabs: user.adminTabs, dashboardTabs: user.dashboardTabs, userId: user._id });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -308,6 +308,9 @@ router.post("/users/:id/approve", async (req, res) => {
     user.approved = req.body.approved;
     if (req.body.adminTabs !== undefined) {
       user.adminTabs = req.body.adminTabs;
+    }
+    if (req.body.dashboardTabs !== undefined) {
+      user.dashboardTabs = req.body.dashboardTabs;
     }
     
     await user.save();
