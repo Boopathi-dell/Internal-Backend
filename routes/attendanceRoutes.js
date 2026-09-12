@@ -31,11 +31,14 @@ router.get("/", async (req, res) => {
         afternoonStatus: "Present"
       }));
       
+      const parsedDate = new Date(date);
+      const isSunday = parsedDate.getUTCDay() === 0;
+
       return res.json({
         cohortName,
         date,
-        isHoliday: false,
-        holidayReason: "",
+        isHoliday: isSunday,
+        holidayReason: isSunday ? "Sunday" : "",
         records: defaultRecords,
         isNew: true
       });
