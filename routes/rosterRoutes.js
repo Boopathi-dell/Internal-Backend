@@ -89,4 +89,39 @@ router.delete("/:cohortName", async (req, res) => {
   }
 });
 
+// Promote a Roster
+router.post("/promote", async (req, res) => {
+  const { sourceCohortName, targetYear, targetSemester } = req.body;
+  if (!sourceCohortName || !targetYear || !targetSemester) {
+    return res.status(400).json({ error: "sourceCohortName, targetYear, and targetSemester are required" });
+  }
+
+  try {
+    const sourceRoster = await Roster.findOne({ cohortName: sourceCohortName });
+    if (!sourceRoster) return res.status(404).json({ error: "Source roster not found" });
+
+    const targetCohortName = `${sourceRoster.programme}-${sourceRoster.department} - ${targetYear}/${targetSemester}/${sourceRoster.section}`;
+    
+    const existingTarget = await Roster.findOne({ cohortName: targetCohortName });
+    if (existingTarget) {
+      return res.status(400).json({ error: "Target roster already exists. Cannot overwrite." });
+    }
+
+    const targetRoster = new Roster({
+      cohortName: targetCohortName,
+      programme: sourceRoster.programme,
+      department: sourceRoster.department,
+      year: targetYear,
+      semester: targetSemester,
+      section: sourceRoster.section,
+      students: sourceRoster.students // exact copy of students array
+    });
+
+    await targetRoster.save();
+    res.status(201).json({ message: "Roster promoted successfully", roster: targetRoster });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to promote roster", details: err.message });
+  }
+});
+
 module.exports = router;
