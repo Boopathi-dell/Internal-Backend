@@ -7,6 +7,7 @@ const User = require("../models/User");
 const Activity = require("../models/Activity");
 const ClassData = require("../models/Class");
 const YearApproval = require("../models/YearApproval");
+const DailyAttendance = require("../models/DailyAttendance");
 const JWT_SECRET = "mec_result_system_secret_2025";
 
 // ADMIN LOGIN
@@ -441,10 +442,42 @@ router.get("/student/results", async (req, res) => {
       };
     });
 
+    let attendancePercentage = null;
+
+    if (results.length > 0) {
+      // Find the most recent active cohort for this student
+      const firstResult = results[0];
+      const programme = firstResult.programme || "B.E";
+      const department = firstResult.department || "CSE";
+      const yss = firstResult.yearSemSec || "";
+      const cohortName = `${programme}-${department} - ${yss}`;
+
+      // Query DailyAttendance for this cohort where it's not a holiday
+      const attendances = await DailyAttendance.find({
+        cohortName: cohortName,
+        isHoliday: false
+      });
+
+      let totalSessions = attendances.length;
+      let presentOdCount = 0;
+
+      attendances.forEach(session => {
+        const studentRecord = session.records.find(r => r.regNo === regNo);
+        if (studentRecord && (studentRecord.status === "Present" || studentRecord.status === "OD")) {
+          presentOdCount++;
+        }
+      });
+
+      if (totalSessions > 0) {
+        attendancePercentage = Math.round((presentOdCount / totalSessions) * 100);
+      }
+    }
+
     res.json({
       name: results[0]?.studentName || decoded.name || "",
       regNo,
-      results
+      results,
+      attendancePercentage
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
