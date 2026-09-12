@@ -32,12 +32,14 @@ router.get("/", async (req, res) => {
         section,
         cohortName: roster.cohortName,
         totalStrength: roster.students.length,
+        isMarked: false,
+        mrg: { totalPossible: 0, totalPresent: 0, totalAbsent: 0, totalOD: 0, isMarked: false },
+        aft: { totalPossible: 0, totalPresent: 0, totalAbsent: 0, totalOD: 0, isMarked: false },
         totalPossible: 0,
         totalPresent: 0,
         totalAbsent: 0,
         totalOD: 0,
-        totalLeave: 0,
-        isMarked: false
+        totalLeave: 0
       };
       grandTotalStrength += roster.students.length;
     });
@@ -58,24 +60,28 @@ router.get("/", async (req, res) => {
       if (!sectionsData[section]) return;
 
       const sec = sectionsData[section];
+      const isMrg = doc.session === "Morning";
+      const sessionObj = isMrg ? sec.mrg : sec.aft;
       
       sec.isMarked = true;
+      sessionObj.isMarked = true;
+      sessionObj.totalPossible += doc.records.length;
       sec.totalPossible += doc.records.length;
       
       doc.records.forEach(record => {
-        if (record.status === "Present") sec.totalPresent++;
-        else if (record.status === "Absent") sec.totalAbsent++;
-        else if (record.status === "OD") sec.totalOD++;
-        else if (record.status === "Leave") sec.totalLeave++;
+        if (record.status === "Present") { sessionObj.totalPresent++; sec.totalPresent++; }
+        else if (record.status === "Absent") { sessionObj.totalAbsent++; sec.totalAbsent++; }
+        else if (record.status === "OD") { sessionObj.totalOD++; sec.totalOD++; }
+        else if (record.status === "Leave") { sec.totalLeave++; }
       });
     });
 
     // Calculate percentages
     const sectionsArray = Object.values(sectionsData).map(sec => {
-      // Let's count Present as Present. If OD is considered Present, we add it. 
-      // The user wants "PRESENT EVOLO", so let's just use totalPresent.
-      const percentage = sec.totalPossible > 0 ? ((sec.totalPresent / sec.totalPossible) * 100).toFixed(2) : "0.00";
-      return { ...sec, percentage };
+      sec.mrg.percentage = sec.mrg.totalPossible > 0 ? ((sec.mrg.totalPresent / sec.mrg.totalPossible) * 100).toFixed(2) : "0.00";
+      sec.aft.percentage = sec.aft.totalPossible > 0 ? ((sec.aft.totalPresent / sec.aft.totalPossible) * 100).toFixed(2) : "0.00";
+      sec.percentage = sec.totalPossible > 0 ? ((sec.totalPresent / sec.totalPossible) * 100).toFixed(2) : "0.00";
+      return sec;
     });
     
     // Sort sections alphabetically
@@ -88,7 +94,9 @@ router.get("/", async (req, res) => {
       totalPresent: 0,
       totalAbsent: 0,
       totalOD: 0,
-      totalLeave: 0
+      totalLeave: 0,
+      mrg: { totalPossible: 0, totalPresent: 0, totalAbsent: 0, totalOD: 0 },
+      aft: { totalPossible: 0, totalPresent: 0, totalAbsent: 0, totalOD: 0 }
     };
 
     sectionsArray.forEach(sec => {
@@ -97,10 +105,28 @@ router.get("/", async (req, res) => {
       grandTotals.totalAbsent += sec.totalAbsent;
       grandTotals.totalOD += sec.totalOD;
       grandTotals.totalLeave += sec.totalLeave;
+      
+      grandTotals.mrg.totalPossible += sec.mrg.totalPossible;
+      grandTotals.mrg.totalPresent += sec.mrg.totalPresent;
+      grandTotals.mrg.totalAbsent += sec.mrg.totalAbsent;
+      grandTotals.mrg.totalOD += sec.mrg.totalOD;
+
+      grandTotals.aft.totalPossible += sec.aft.totalPossible;
+      grandTotals.aft.totalPresent += sec.aft.totalPresent;
+      grandTotals.aft.totalAbsent += sec.aft.totalAbsent;
+      grandTotals.aft.totalOD += sec.aft.totalOD;
     });
 
     grandTotals.percentage = grandTotals.totalPossible > 0 
       ? ((grandTotals.totalPresent / grandTotals.totalPossible) * 100).toFixed(2) 
+      : "0.00";
+      
+    grandTotals.mrg.percentage = grandTotals.mrg.totalPossible > 0 
+      ? ((grandTotals.mrg.totalPresent / grandTotals.mrg.totalPossible) * 100).toFixed(2) 
+      : "0.00";
+      
+    grandTotals.aft.percentage = grandTotals.aft.totalPossible > 0 
+      ? ((grandTotals.aft.totalPresent / grandTotals.aft.totalPossible) * 100).toFixed(2) 
       : "0.00";
 
     res.json({ sections: sectionsArray, total: grandTotals });
