@@ -174,7 +174,7 @@ router.get("/missing", async (req, res) => {
 
        while (currentDate <= endDate) {
           // Skip Sundays (0)
-          if (currentDate.getDay() !== 0) {
+          if (currentDate.getUTCDay() !== 0) {
              const dateStr = currentDate.toISOString().slice(0, 10);
              const hasMorning = attendanceSet.has(`${roster.cohortName}|${dateStr}|Morning`);
              const hasAfternoon = attendanceSet.has(`${roster.cohortName}|${dateStr}|Afternoon`);
