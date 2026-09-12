@@ -36,7 +36,8 @@ router.get("/", async (req, res) => {
         totalPresent: 0,
         totalAbsent: 0,
         totalOD: 0,
-        totalLeave: 0
+        totalLeave: 0,
+        isMarked: false
       };
       grandTotalStrength += roster.students.length;
     });
@@ -46,7 +47,7 @@ router.get("/", async (req, res) => {
     
     const attendances = await DailyAttendance.find({
       cohortName: { $in: cohortNames },
-      date: { $lte: asOfDate },
+      date: asOfDate,
       isHoliday: false
     }).lean();
 
@@ -58,6 +59,7 @@ router.get("/", async (req, res) => {
 
       const sec = sectionsData[section];
       
+      sec.isMarked = true;
       sec.totalPossible += doc.records.length;
       
       doc.records.forEach(record => {
