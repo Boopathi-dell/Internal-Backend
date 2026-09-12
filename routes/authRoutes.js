@@ -57,10 +57,13 @@ router.post("/admin/login", async (req, res) => {
       }
     }
 
-    // Generate Session Token for Single Active Session
-    const sessionToken = crypto.randomUUID();
-    admin.sessionToken = sessionToken;
-    await admin.save();
+    // Reuse existing Session Token to allow concurrent sessions
+    let sessionToken = admin.sessionToken;
+    if (!sessionToken) {
+      sessionToken = crypto.randomUUID();
+      admin.sessionToken = sessionToken;
+      await admin.save();
+    }
 
     const token = jwt.sign({ id: admin._id, role: adminRole, printEditAccess: admin.printEditAccess, sessionToken }, JWT_SECRET, { expiresIn: "24h" });
     res.json({ token, role: adminRole, email: admin.email, printEditAccess: admin.printEditAccess });
@@ -107,10 +110,13 @@ router.post("/admin/verify-security-answer", async (req, res) => {
       return res.status(401).json({ error: "Incorrect Answer" });
     }
 
-    // Generate Session Token for Single Active Session
-    const sessionToken = crypto.randomUUID();
-    admin.sessionToken = sessionToken;
-    await admin.save();
+    // Reuse existing Session Token to allow concurrent sessions
+    let sessionToken = admin.sessionToken;
+    if (!sessionToken) {
+      sessionToken = crypto.randomUUID();
+      admin.sessionToken = sessionToken;
+      await admin.save();
+    }
 
     // Login successful
     let adminRole = admin.role || "admin";
@@ -254,7 +260,11 @@ router.post("/user/login", async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(401).json({ error: "Invalid credentials" });
 
-    const token = jwt.sign({ id: user._id, role: "user", name: user.name }, JWT_SECRET, { expiresIn: "24h" });
+    const token = jwt.sign(
+      { id: user._id, role: "user", email: user.email, name: user.name, department: user.department, designation: user.designation, adminTabs: user.adminTabs },
+      JWT_SECRET,
+      { expiresIn: "24h" }
+    );
 
     // Track login activity
     await new Activity({
@@ -264,7 +274,7 @@ router.post("/user/login", async (req, res) => {
       details: `${user.name} logged in`
     }).save();
 
-    res.json({ token, role: "user", name: user.name, userId: user._id });
+    res.json({ token, role: "user", name: user.name, department: user.department, designation: user.designation, adminTabs: user.adminTabs, userId: user._id });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -280,13 +290,28 @@ router.get("/users", async (req, res) => {
   }
 });
 
-// APPROVE/REJECT USER
+// APPROVE / REJECT USER (Protected, Admin Only)
 router.post("/users/:id/approve", async (req, res) => {
   try {
-    const { approved } = req.body;
-    const user = await User.findByIdAndUpdate(req.params.id, { approved }, { new: true }).select("-password");
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).json({ error: "No token provided" });
+    const token = authHeader.split(" ")[1];
+    
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded.role !== "admin" && decoded.role !== "printAdmin") {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ error: "User not found" });
-    res.json(user);
+
+    user.approved = req.body.approved;
+    if (req.body.adminTabs !== undefined) {
+      user.adminTabs = req.body.adminTabs;
+    }
+    
+    await user.save();
+    res.json({ message: `User ${req.body.approved ? 'approved' : 'rejected'} successfully`, user });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -297,6 +322,35 @@ router.delete("/users/:id", async (req, res) => {
   try {
     await User.findByIdAndDelete(req.params.id);
     res.json({ message: "User deleted" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// REVOKE OTHER ADMIN SESSIONS (Global Logout)
+router.post("/admin/revoke-others", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).json({ error: "No token provided" });
+    const token = authHeader.split(" ")[1];
+    
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded.role !== "admin" && decoded.role !== "printAdmin") {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    const admin = await Admin.findById(decoded.id);
+    if (!admin) return res.status(404).json({ error: "Admin not found" });
+
+    // Generate a fresh session token for the current device and save it
+    const newSessionToken = crypto.randomUUID();
+    admin.sessionToken = newSessionToken;
+    await admin.save();
+
+    // Generate a new JWT token containing the new session token
+    const newToken = jwt.sign({ id: admin._id, role: admin.role, printEditAccess: admin.printEditAccess, sessionToken: newSessionToken }, JWT_SECRET, { expiresIn: "24h" });
+    
+    res.json({ message: "All other sessions revoked successfully", token: newToken });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

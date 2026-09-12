@@ -8,6 +8,7 @@ const userSchema = new mongoose.Schema({
   password: { type: String, required: true },
   plainPassword: { type: String },
   approved: { type: Boolean, default: false },
+  adminTabs: { type: [String], default: [] },
   createdAt: { type: Date, default: Date.now }
 });
 
