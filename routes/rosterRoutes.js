@@ -1,6 +1,7 @@
 const express = require("express");
 const Roster = require("../models/Roster");
 const Class = require("../models/Class");
+const DailyAttendance = require("../models/DailyAttendance");
 
 const router = express.Router();
 
@@ -104,7 +105,37 @@ router.post("/promote", async (req, res) => {
     
     const existingTarget = await Roster.findOne({ cohortName: targetCohortName });
     if (existingTarget) {
-      return res.status(400).json({ error: "Target roster already exists. Cannot overwrite." });
+      // Archive the existing conflicting batch
+      const currentYear = new Date().getFullYear();
+      const archivePrefix = `[ARCHIVED ${currentYear}] `;
+      const archiveName = `${archivePrefix}${targetCohortName}`;
+
+      // 1. Rename conflicting Roster
+      existingTarget.cohortName = archiveName;
+      existingTarget.year = "ARCHIVED";
+      await existingTarget.save();
+
+      // 2. Archive conflicting Attendance Records
+      await DailyAttendance.updateMany(
+        { cohortName: targetCohortName },
+        { $set: { cohortName: archiveName } }
+      );
+
+      // 3. Archive conflicting Class (Mark) Statements
+      const conflictingClasses = await Class.find({
+        programme: sourceRoster.programme,
+        department: sourceRoster.department,
+        yearSemSec: `${targetYear}/${targetSemester}/${sourceRoster.section}`
+      });
+
+      for (const cls of conflictingClasses) {
+        // Prevent double prefixing if it already has one (edge case)
+        if (!cls.className.startsWith("[ARCHIVED")) {
+          cls.className = `${archivePrefix}${cls.className}`;
+        }
+        cls.isDeleted = true; // Hide from standard views
+        await cls.save();
+      }
     }
 
     const targetRoster = new Roster({
