@@ -1,4 +1,5 @@
 const express = require("express");
+const crypto = require("crypto");
 const router = express.Router();
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
@@ -56,7 +57,12 @@ router.post("/admin/login", async (req, res) => {
       }
     }
 
-    const token = jwt.sign({ id: admin._id, role: adminRole, printEditAccess: admin.printEditAccess }, JWT_SECRET, { expiresIn: "24h" });
+    // Generate Session Token for Single Active Session
+    const sessionToken = crypto.randomUUID();
+    admin.sessionToken = sessionToken;
+    await admin.save();
+
+    const token = jwt.sign({ id: admin._id, role: adminRole, printEditAccess: admin.printEditAccess, sessionToken }, JWT_SECRET, { expiresIn: "24h" });
     res.json({ token, role: adminRole, email: admin.email, printEditAccess: admin.printEditAccess });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -101,12 +107,43 @@ router.post("/admin/verify-security-answer", async (req, res) => {
       return res.status(401).json({ error: "Incorrect Answer" });
     }
 
+    // Generate Session Token for Single Active Session
+    const sessionToken = crypto.randomUUID();
+    admin.sessionToken = sessionToken;
+    await admin.save();
+
     // Login successful
     let adminRole = admin.role || "admin";
-    const token = jwt.sign({ id: admin._id, role: adminRole }, JWT_SECRET, { expiresIn: "24h" });
+    const token = jwt.sign({ id: admin._id, role: adminRole, sessionToken }, JWT_SECRET, { expiresIn: "24h" });
     res.json({ token, role: adminRole, email: admin.email, message: "Logged in via Security Question" });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// VERIFY ADMIN SESSION
+router.get("/admin/verify-session", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).json({ error: "No token provided" });
+    const token = authHeader.split(" ")[1];
+    
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded.role !== "admin" && decoded.role !== "printAdmin") {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    const admin = await Admin.findById(decoded.id);
+    if (!admin) return res.status(404).json({ error: "Admin not found" });
+
+    // If the JWT has a sessionToken and it doesn't match the DB, revoke session
+    if (decoded.sessionToken && admin.sessionToken && decoded.sessionToken !== admin.sessionToken) {
+      return res.status(401).json({ error: "Session revoked. Logged in from another device." });
+    }
+
+    res.json({ message: "Session valid" });
+  } catch (err) {
+    res.status(401).json({ error: "Invalid token" });
   }
 });
 

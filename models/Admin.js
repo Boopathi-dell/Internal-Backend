@@ -7,7 +7,8 @@ const adminSchema = new mongoose.Schema({
   securityCode: { type: String, default: "" },
   securityQuestion: { type: String, default: "" },
   securityAnswer: { type: String, default: "" },
-  printEditAccess: { type: Boolean, default: false }
+  printEditAccess: { type: Boolean, default: false },
+  sessionToken: { type: String, default: "" }
 });
 
 module.exports = mongoose.model("Admin", adminSchema);
