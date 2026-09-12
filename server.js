@@ -12,6 +12,7 @@ const announcementRoutes = require("./routes/announcementRoutes");
 const letterRoutes = require("./routes/letterRoutes");
 const rosterRoutes = require("./routes/rosterRoutes");
 const seatingRoutes = require("./routes/seatingRoutes");
+const attendanceRoutes = require("./routes/attendanceRoutes");
 
 const app = express();
 app.use(cors({
@@ -33,6 +34,7 @@ app.use("/api/announcements", announcementRoutes);
 app.use("/api/letter-template", letterRoutes);
 app.use("/api/rosters", rosterRoutes);
 app.use("/api/seating", seatingRoutes);
+app.use("/api/attendance", attendanceRoutes);
 
 // MongoDB connect
 const MONGO_URI = process.env.MONGO_URI;
