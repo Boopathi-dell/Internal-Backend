@@ -1,45 +1,95 @@
 const express = require("express");
 const DailyAttendance = require("../models/DailyAttendance");
 const Roster = require("../models/Roster");
+const WorkingDays = require("../models/WorkingDays");
 
 const router = express.Router();
 
-// GET attendance for a specific cohort, date, and session
+// GET merged attendance (Morning & Afternoon) for a specific cohort and date
 router.get("/", async (req, res) => {
-  const { cohortName, date, session } = req.query;
+  const { cohortName, date } = req.query;
   
-  if (!cohortName || !date || !session) {
-    return res.status(400).json({ error: "Missing required query parameters: cohortName, date, session" });
+  if (!cohortName || !date) {
+    return res.status(400).json({ error: "Missing required query parameters: cohortName, date" });
   }
 
   try {
-    const attendance = await DailyAttendance.findOne({ cohortName, date, session });
+    const morning = await DailyAttendance.findOne({ cohortName, date, session: "Morning" });
+    const afternoon = await DailyAttendance.findOne({ cohortName, date, session: "Afternoon" });
     
-    // If found, return it
-    if (attendance) {
-      return res.json(attendance);
+    // If neither exists, return a default template from roster
+    if (!morning && !afternoon) {
+      const roster = await Roster.findOne({ cohortName });
+      if (!roster) {
+        return res.status(404).json({ error: "Roster not found for this cohort" });
+      }
+      
+      const defaultRecords = roster.students.map(s => ({
+        regNo: s.regNo,
+        name: s.name,
+        morningStatus: "Present",
+        afternoonStatus: "Present"
+      }));
+      
+      return res.json({
+        cohortName,
+        date,
+        isHoliday: false,
+        holidayReason: "",
+        records: defaultRecords,
+        isNew: true
+      });
+    }
+
+    // Merge existing records
+    // Create a map of regNo to merged record
+    const recordsMap = {};
+    
+    const isHoliday = (morning && morning.isHoliday) || (afternoon && afternoon.isHoliday) || false;
+    const holidayReason = (morning && morning.holidayReason) || (afternoon && afternoon.holidayReason) || "";
+
+    if (morning && !morning.isHoliday) {
+      morning.records.forEach(r => {
+        recordsMap[r.regNo] = { regNo: r.regNo, name: r.name, morningStatus: r.status, afternoonStatus: "Present" };
+      });
     }
     
-    // If not found, fetch the roster to return a default template
-    const roster = await Roster.findOne({ cohortName });
-    if (!roster) {
-      return res.status(404).json({ error: "Roster not found for this cohort" });
+    if (afternoon && !afternoon.isHoliday) {
+      afternoon.records.forEach(r => {
+        if (!recordsMap[r.regNo]) {
+          recordsMap[r.regNo] = { regNo: r.regNo, name: r.name, morningStatus: "Present", afternoonStatus: r.status };
+        } else {
+          recordsMap[r.regNo].afternoonStatus = r.status;
+        }
+      });
     }
+
+    // If it's a holiday, records map might be empty, but that's fine. If we need names, we could fetch from roster, 
+    // but the frontend hides the table on holiday anyway.
+    let records = Object.values(recordsMap);
     
-    const defaultRecords = roster.students.map(s => ({
-      regNo: s.regNo,
-      name: s.name,
-      status: "Present"
-    }));
-    
+    // Ensure all students from roster exist in the map just in case
+    if (!isHoliday) {
+       const roster = await Roster.findOne({ cohortName });
+       if (roster) {
+          roster.students.forEach(s => {
+             if (!recordsMap[s.regNo]) {
+                 records.push({ regNo: s.regNo, name: s.name, morningStatus: "Present", afternoonStatus: "Present" });
+             }
+          });
+       }
+    }
+
+    // Sort records by regNo
+    records.sort((a, b) => a.regNo.localeCompare(b.regNo));
+
     return res.json({
       cohortName,
       date,
-      session,
-      isHoliday: false,
-      holidayReason: "",
-      records: defaultRecords,
-      isNew: true // Flag to help frontend know it's unsaved
+      isHoliday,
+      holidayReason,
+      records,
+      isNew: false
     });
     
   } catch (err) {
@@ -48,44 +98,120 @@ router.get("/", async (req, res) => {
   }
 });
 
-// POST save or update daily attendance
+// POST save or update daily attendance (Morning & Afternoon simultaneously)
 router.post("/", async (req, res) => {
-  const { cohortName, date, session, isHoliday, holidayReason, records } = req.body;
+  const { cohortName, date, isHoliday, holidayReason, records } = req.body;
   
-  if (!cohortName || !date || !session) {
+  if (!cohortName || !date) {
     return res.status(400).json({ error: "Missing required fields" });
   }
 
   try {
-    let attendance = await DailyAttendance.findOne({ cohortName, date, session });
+    const morningRecords = isHoliday ? [] : records.map(r => ({ regNo: r.regNo, name: r.name, status: r.morningStatus }));
+    const afternoonRecords = isHoliday ? [] : records.map(r => ({ regNo: r.regNo, name: r.name, status: r.afternoonStatus }));
+
+    // Save Morning
+    await DailyAttendance.findOneAndUpdate(
+      { cohortName, date, session: "Morning" },
+      { isHoliday: isHoliday || false, holidayReason: holidayReason || "", records: morningRecords },
+      { upsert: true, new: true }
+    );
+
+    // Save Afternoon
+    await DailyAttendance.findOneAndUpdate(
+      { cohortName, date, session: "Afternoon" },
+      { isHoliday: isHoliday || false, holidayReason: holidayReason || "", records: afternoonRecords },
+      { upsert: true, new: true }
+    );
     
-    if (attendance) {
-      // Update existing
-      attendance.isHoliday = isHoliday || false;
-      attendance.holidayReason = holidayReason || "";
-      attendance.records = isHoliday ? [] : records; // clear records if it's a holiday
-      await attendance.save();
-    } else {
-      // Create new
-      attendance = new DailyAttendance({
-        cohortName,
-        date,
-        session,
-        isHoliday: isHoliday || false,
-        holidayReason: holidayReason || "",
-        records: isHoliday ? [] : records
-      });
-      await attendance.save();
-    }
-    
-    res.json({ message: "Attendance saved successfully", data: attendance });
+    res.json({ message: "Attendance saved successfully" });
   } catch (err) {
     console.error("Error saving daily attendance:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// GET summary of attendance for a cohort between two dates
+// GET missing attendance report for Admin
+router.get("/missing", async (req, res) => {
+  try {
+    const workingDaysConfig = await WorkingDays.find({});
+    const rosters = await Roster.find({});
+    
+    if (workingDaysConfig.length === 0 || rosters.length === 0) {
+       return res.json([]);
+    }
+
+    const yearConfigs = {};
+    workingDaysConfig.forEach(cfg => {
+       yearConfigs[cfg.year] = { start: new Date(cfg.startDate), end: new Date(cfg.endDate) };
+    });
+
+    // Fetch all attendance records that exist to avoid querying in a loop
+    const allAttendances = await DailyAttendance.find({}).lean();
+    
+    // Create a fast lookup set: Set<"cohortName|date|session">
+    const attendanceSet = new Set();
+    allAttendances.forEach(a => {
+       attendanceSet.add(`${a.cohortName}|${a.date}|${a.session}`);
+    });
+
+    const missingReport = [];
+    const today = new Date();
+    today.setHours(0,0,0,0);
+
+    rosters.forEach(roster => {
+       // Extract year from cohortName (e.g. "B.E-CSE - II/IV/A" -> "II")
+       const yearMatch = roster.cohortName.match(/ - ([I|V|X]+)\//);
+       if (!yearMatch) return;
+       const year = yearMatch[1];
+       const config = yearConfigs[year];
+       
+       if (!config) return; // No working days configured for this year
+
+       // Iterate dates from start to end (or today, whichever is earlier)
+       let currentDate = new Date(config.start);
+       const endDate = config.end < today ? config.end : today;
+
+       while (currentDate <= endDate) {
+          // Skip Sundays (0)
+          if (currentDate.getDay() !== 0) {
+             const dateStr = currentDate.toISOString().slice(0, 10);
+             const hasMorning = attendanceSet.has(`${roster.cohortName}|${dateStr}|Morning`);
+             const hasAfternoon = attendanceSet.has(`${roster.cohortName}|${dateStr}|Afternoon`);
+             
+             if (!hasMorning || !hasAfternoon) {
+                let missingSession = "Both";
+                if (hasMorning && !hasAfternoon) missingSession = "Afternoon";
+                if (!hasMorning && hasAfternoon) missingSession = "Morning";
+                
+                missingReport.push({
+                   date: dateStr,
+                   cohortName: roster.cohortName,
+                   missingSession
+                });
+             }
+          }
+          currentDate.setDate(currentDate.getDate() + 1);
+       }
+    });
+
+    // Sort report by date (descending), then cohortName
+    missingReport.sort((a, b) => {
+       if (a.date !== b.date) {
+          return new Date(b.date) - new Date(a.date);
+       }
+       return a.cohortName.localeCompare(b.cohortName);
+    });
+
+    res.json(missingReport);
+
+  } catch (err) {
+    console.error("Error generating missing attendance report:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET summary of attendance for a cohort between two dates (Keep for existing features)
 router.get("/summary", async (req, res) => {
   const { cohortName, startDate, endDate } = req.query;
   
@@ -94,7 +220,6 @@ router.get("/summary", async (req, res) => {
   }
 
   try {
-    // Get all attendance documents in range for this cohort
     const attendances = await DailyAttendance.find({
       cohortName,
       date: { $gte: startDate, $lte: endDate }
@@ -104,7 +229,6 @@ router.get("/summary", async (req, res) => {
       return res.json({ summary: [], totalWorkingSessions: 0 });
     }
 
-    // Filter out holidays to find working sessions
     const workingSessions = attendances.filter(a => !a.isHoliday);
     const totalWorkingSessions = workingSessions.length;
     
@@ -112,8 +236,7 @@ router.get("/summary", async (req, res) => {
       return res.json({ summary: [], totalWorkingSessions: 0 });
     }
 
-    // Calculate present count for each student
-    const studentStats = {}; // regNo -> presentCount
+    const studentStats = {};
 
     workingSessions.forEach(session => {
       session.records.forEach(record => {
@@ -123,16 +246,13 @@ router.get("/summary", async (req, res) => {
         if (record.status === "Present") {
           studentStats[record.regNo].presentCount += 1;
         } else if (record.status === "OD") {
-          // Typically OD is counted as present for percentage calculation
           studentStats[record.regNo].odCount += 1;
         }
       });
     });
 
-    // Create final summary array
     const summary = Object.keys(studentStats).map(regNo => {
       const stats = studentStats[regNo];
-      // Formula: ((Present + OD) / Total Working Sessions) * 100
       const effectivePresent = stats.presentCount + stats.odCount;
       const percentage = totalWorkingSessions > 0 ? Math.round((effectivePresent / totalWorkingSessions) * 100) : 0;
       
