@@ -277,4 +277,136 @@ router.get("/summary", async (req, res) => {
   }
 });
 
+// GET grid data for Regular Grid Report
+router.get("/grid", async (req, res) => {
+  const { cohortName, startDate, endDate } = req.query;
+  
+  if (!cohortName || !startDate || !endDate) {
+    return res.status(400).json({ error: "Missing required parameters" });
+  }
+
+  try {
+    const attendances = await DailyAttendance.find({
+      cohortName,
+      date: { $gte: startDate, $lte: endDate },
+      isHoliday: false
+    });
+
+    if (attendances.length === 0) {
+      return res.json({ dates: [], grid: [] });
+    }
+
+    const uniqueDates = [...new Set(attendances.map(a => a.date))].sort();
+    const studentMap = {};
+
+    attendances.forEach(sessionDoc => {
+      const date = sessionDoc.date;
+      const isMorning = sessionDoc.session === "Morning";
+      
+      sessionDoc.records.forEach(record => {
+        if (!studentMap[record.regNo]) {
+          studentMap[record.regNo] = { regNo: record.regNo, name: record.name, attendance: {} };
+        }
+        
+        if (!studentMap[record.regNo].attendance[date]) {
+           studentMap[record.regNo].attendance[date] = { morning: null, afternoon: null };
+        }
+        
+        if (isMorning) {
+           studentMap[record.regNo].attendance[date].morning = record.status;
+        } else {
+           studentMap[record.regNo].attendance[date].afternoon = record.status;
+        }
+      });
+    });
+
+    const grid = Object.values(studentMap).map(student => {
+       const finalAttendance = {};
+       uniqueDates.forEach(date => {
+          const dayStatus = student.attendance[date];
+          if (!dayStatus) {
+             finalAttendance[date] = "-";
+             return;
+          }
+          const m = dayStatus.morning;
+          const a = dayStatus.afternoon;
+          
+          const isMPresent = m === "Present" || m === "OD";
+          const isAPresent = a === "Present" || a === "OD";
+          
+          if (isMPresent && isAPresent) finalAttendance[date] = "X";
+          else if (!isMPresent && !isAPresent) finalAttendance[date] = "a";
+          else finalAttendance[date] = "/";
+       });
+       return { regNo: student.regNo, name: student.name, attendance: finalAttendance };
+    });
+
+    grid.sort((a, b) => a.regNo.localeCompare(b.regNo));
+
+    res.json({ dates: uniqueDates, grid });
+
+  } catch (err) {
+    console.error("Error generating grid:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET individual student attendance history
+router.get("/student/:regNo", async (req, res) => {
+  const { regNo } = req.params;
+  const { startDate, endDate } = req.query;
+
+  try {
+    const query = { "records.regNo": regNo, isHoliday: false };
+    if (startDate && endDate) {
+      query.date = { $gte: startDate, $lte: endDate };
+    }
+
+    const attendances = await DailyAttendance.find(query).sort({ date: 1 });
+    
+    const dateMap = {};
+    attendances.forEach(doc => {
+       const record = doc.records.find(r => r.regNo === regNo);
+       if (!record) return;
+
+       if (!dateMap[doc.date]) {
+          dateMap[doc.date] = { date: doc.date, morning: "-", afternoon: "-", cohortName: doc.cohortName };
+       }
+       if (doc.session === "Morning") dateMap[doc.date].morning = record.status;
+       else if (doc.session === "Afternoon") dateMap[doc.date].afternoon = record.status;
+    });
+
+    res.json(Object.values(dateMap));
+
+  } catch (err) {
+    console.error("Error fetching student attendance:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// PUT update individual student attendance for a specific date
+router.put("/student/:regNo/date/:date", async (req, res) => {
+  const { regNo, date } = req.params;
+  const { morningStatus, afternoonStatus, cohortName } = req.body;
+
+  try {
+    if (morningStatus) {
+      await DailyAttendance.updateOne(
+        { cohortName, date, session: "Morning", "records.regNo": regNo },
+        { $set: { "records.$.status": morningStatus } }
+      );
+    }
+    if (afternoonStatus) {
+      await DailyAttendance.updateOne(
+        { cohortName, date, session: "Afternoon", "records.regNo": regNo },
+        { $set: { "records.$.status": afternoonStatus } }
+      );
+    }
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Error updating student attendance:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 module.exports = router;
