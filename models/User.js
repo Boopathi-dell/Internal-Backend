@@ -10,6 +10,7 @@ const userSchema = new mongoose.Schema({
   approved: { type: Boolean, default: false },
   adminTabs: { type: [String], default: [] },
   dashboardTabs: { type: [String], default: ["daily-attendance", "attendance", "entry"] },
+  modulesConfigured: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now }
 });
 

@@ -260,8 +260,13 @@ router.post("/user/login", async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(401).json({ error: "Invalid credentials" });
 
+    let dTabs = user.dashboardTabs || [];
+    if (!user.modulesConfigured && dTabs.length === 0) {
+      dTabs = ["daily-attendance", "attendance", "entry"];
+    }
+
     const token = jwt.sign(
-      { id: user._id, role: "user", email: user.email, name: user.name, department: user.department, designation: user.designation, adminTabs: user.adminTabs, dashboardTabs: user.dashboardTabs },
+      { id: user._id, role: "user", email: user.email, name: user.name, department: user.department, designation: user.designation, adminTabs: user.adminTabs, dashboardTabs: dTabs },
       JWT_SECRET,
       { expiresIn: "24h" }
     );
@@ -274,7 +279,7 @@ router.post("/user/login", async (req, res) => {
       details: `${user.name} logged in`
     }).save();
 
-    res.json({ token, role: "user", name: user.name, department: user.department, designation: user.designation, adminTabs: user.adminTabs, dashboardTabs: user.dashboardTabs, userId: user._id });
+    res.json({ token, role: "user", name: user.name, department: user.department, designation: user.designation, adminTabs: user.adminTabs, dashboardTabs: dTabs, userId: user._id });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -284,7 +289,14 @@ router.post("/user/login", async (req, res) => {
 router.get("/users", async (req, res) => {
   try {
     const users = await User.find().select("-password").sort({ createdAt: -1 });
-    res.json(users);
+    const mappedUsers = users.map(u => {
+      const userObj = u.toObject();
+      if (!userObj.modulesConfigured && (!userObj.dashboardTabs || userObj.dashboardTabs.length === 0)) {
+        userObj.dashboardTabs = ["daily-attendance", "attendance", "entry"];
+      }
+      return userObj;
+    });
+    res.json(mappedUsers);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -311,6 +323,7 @@ router.post("/users/:id/approve", async (req, res) => {
     }
     if (req.body.dashboardTabs !== undefined) {
       user.dashboardTabs = req.body.dashboardTabs;
+      user.modulesConfigured = true;
     }
     
     await user.save();
