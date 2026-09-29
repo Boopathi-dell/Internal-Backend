@@ -268,7 +268,11 @@ export default function AttendanceEntry() {
           if (!row || !row[regNoIdx]) continue;
           
           const regNo = String(row[regNoIdx]).trim();
-          const att = row[attIdx] !== undefined ? String(row[attIdx]).trim() : "";
+          let att = row[attIdx] !== undefined ? String(row[attIdx]).trim() : "";
+          
+          if (att !== "" && !isNaN(Number(att))) {
+            att = Math.round(Number(att)).toString();
+          }
           
           const studentIndex = newStudents.findIndex(s => s.regNo === regNo);
           if (studentIndex !== -1 && att !== "") {
