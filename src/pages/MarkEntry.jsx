@@ -651,7 +651,25 @@ export default function MarkEntry() {
           else {
             const codeStr = val.replace(/[^A-Z0-9]/g, '');
             // Check if this matches any of the class subjects
-            const subIdx = classData.subjects.findIndex(s => s.replace(/[^A-Z0-9]/g, '') === codeStr);
+            const subIdx = classData.subjects.findIndex((s, idx) => {
+               const subjectStr = (s || "").toString().toUpperCase();
+               
+               // Exact match on alphanumeric stripped
+               if (subjectStr.replace(/[^A-Z0-9]/g, '') === codeStr) return true;
+               
+               // Check if header value is part of the subject string (e.g. "OOPS" in "25CSC21 - OOPS")
+               // Avoid false positives by ensuring val is at least 2 characters long
+               if (val.length >= 2 && subjectStr.includes(val)) return true;
+               
+               // Check courseDetails if available
+               if (classData.courseDetails && classData.courseDetails[idx]) {
+                   const cd = classData.courseDetails[idx];
+                   if (cd.courseCode && cd.courseCode.toUpperCase().replace(/[^A-Z0-9]/g, '') === codeStr) return true;
+                   if (cd.shortName && cd.shortName.toUpperCase().replace(/[^A-Z0-9]/g, '') === codeStr) return true;
+                   if (cd.courseName && cd.courseName.toUpperCase().replace(/[^A-Z0-9]/g, '') === codeStr) return true;
+               }
+               return false;
+            });
             if (subIdx !== -1) {
               subjectColMap[subIdx] = i;
             }
