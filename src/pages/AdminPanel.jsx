@@ -2227,6 +2227,15 @@ export default function AdminPanel() {
           📅 Attendance Tracker
         </button>
         )}
+        {hasAccessTo("internal-marks") && (
+        <button 
+          className={`btn ${activeTab === "internal-marks" ? "btn-primary" : "btn-secondary"}`} 
+          style={{ borderRadius: "12px 12px 0 0", padding: "0.75rem 1.5rem" }}
+          onClick={() => setActiveTab("internal-marks")}
+        >
+          📊 Internal Mark Templates
+        </button>
+        )}
       </div>
 
       {/* CLASS SETUP TAB */}
