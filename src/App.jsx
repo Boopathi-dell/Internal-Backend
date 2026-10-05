@@ -5,6 +5,7 @@ import AdminPanel from "./pages/AdminPanel";
 import MarkEntry from "./pages/MarkEntry";
 import ResultAnalysis from "./pages/ResultAnalysis";
 import DepartmentAnalysis from "./pages/DepartmentAnalysis";
+import InternalMarkSheet from "./pages/InternalMarkSheet";
 import RankList from "./pages/RankList";
 import AdminLogin from "./pages/AdminLogin";
 import UserLogin from "./pages/UserLogin";
@@ -333,6 +334,7 @@ function App() {
     { name: "Daily Attendance", path: "/daily-attendance", icon: <Calendar size={20} /> },
     { name: "Attendance Entry", path: "/attendance", icon: <FileEdit size={20} /> },
     { name: "Mark Statement", path: "/entry", icon: <FileEdit size={20} /> },
+    { name: "Internal Marks", path: "/internal-mark", icon: <FileEdit size={20} /> },
     { name: "Class Analysis", path: "/analysis", icon: <BarChart size={20} /> },
     { name: "Dept. Analysis", path: "/department-analysis", icon: <BarChart size={20} /> },
     { name: "Rank List", path: "/rank", icon: <Trophy size={20} /> },
@@ -349,6 +351,7 @@ function App() {
     { name: "Daily Attendance", path: "/daily-attendance", icon: <Calendar size={20} /> },
     { name: "Attendance Entry", path: "/attendance", icon: <FileEdit size={20} /> },
     { name: "Mark Statement", path: "/entry", icon: <FileEdit size={20} /> },
+    { name: "Internal Marks", path: "/internal-mark", icon: <FileEdit size={20} /> },
     { name: "Class Analysis", path: "/analysis", icon: <BarChart size={20} /> },
     { name: "Dept. Analysis", path: "/department-analysis", icon: <BarChart size={20} /> },
     { name: "Rank List", path: "/rank", icon: <Trophy size={20} /> },
@@ -371,6 +374,7 @@ function App() {
     { id: "daily-attendance", name: "Daily Attendance", path: "/daily-attendance", icon: <Calendar size={20} /> },
     { id: "attendance", name: "Attendance Entry", path: "/attendance", icon: <FileEdit size={20} /> },
     { id: "entry", name: "Mark Statement", path: "/entry", icon: <FileEdit size={20} /> },
+    { id: "internal-mark", name: "Internal Marks", path: "/internal-mark", icon: <FileEdit size={20} /> },
     { id: "analysis", name: "Class Analysis", path: "/analysis", icon: <BarChart size={20} /> },
     { id: "department-analysis", name: "Dept. Analysis", path: "/department-analysis", icon: <BarChart size={20} /> },
     { id: "rank", name: "Rank List", path: "/rank", icon: <Trophy size={20} /> },
@@ -493,12 +497,14 @@ function App() {
               <Route path="/daily-attendance" element={isStudent ? <StudentDashboard /> : <DailyAttendance />} />
               <Route path="/attendance" element={isStudent ? <StudentDashboard /> : <AttendanceEntry />} />
               <Route path="/entry" element={isStudent ? <StudentDashboard /> : <MarkEntry />} />
+              <Route path="/internal-mark" element={isStudent ? <StudentDashboard /> : <InternalMarkSheet />} />
               {(isAdmin || isPrintAdmin) && <Route path="/analysis" element={<ResultAnalysis />} />}
               {(isAdmin || isPrintAdmin) && <Route path="/department-analysis" element={<DepartmentAnalysis />} />}
               {(isAdmin || isPrintAdmin) && <Route path="/rank" element={<RankList />} />}
               {(isAdmin || isPrintAdmin) && <Route path="/parent-letters" element={<ParentLetter />} />}
               {(isAdmin || isPrintAdmin) && <Route path="/requests" element={<CorrectionRequests />} />}
               {/* Faculty (user) routes for allocated dashboard pages */}
+              {(!isAdmin && !isPrintAdmin && !isStudent) && <Route path="/internal-mark" element={<InternalMarkSheet />} />}
               {(!isAdmin && !isPrintAdmin && !isStudent) && <Route path="/analysis" element={<ResultAnalysis />} />}
               {(!isAdmin && !isPrintAdmin && !isStudent) && <Route path="/department-analysis" element={<DepartmentAnalysis />} />}
               {(!isAdmin && !isPrintAdmin && !isStudent) && <Route path="/rank" element={<RankList />} />}

@@ -4,6 +4,7 @@ import API from "../api";
 import { Eye, EyeOff } from "lucide-react";
 import SeatingManager from "../components/SeatingManager";
 import AttendanceReportsContainer from "../components/AttendanceReportsContainer";
+import InternalMarkTemplateSetup from "../components/InternalMarkTemplateSetup";
 
 export default function AdminPanel() {
   const role = sessionStorage.getItem("role");
@@ -44,7 +45,8 @@ export default function AdminPanel() {
     { id: "lettertemplate", label: "Letter Template" },
     { id: "reportsettings", label: "Report Settings" },
     { id: "seating", label: "Seating" },
-    { id: "attendance-tracker", label: "Attendance Tracker" }
+    { id: "attendance-tracker", label: "Attendance Tracker" },
+    { id: "internal-marks", label: "Internal Mark Templates" }
   ];
 
   const AVAILABLE_DASHBOARD_PAGES = [
@@ -2284,11 +2286,25 @@ export default function AdminPanel() {
               </div>
               <div className="input-group">
                 <label className="input-label">Department</label>
-                <input value={formData.department} onChange={e => {
+                <input list="dept-options" value={formData.department} onChange={e => {
                   const val = e.target.value;
                   setFormData(prev => ({ ...prev, department: val }));
                   checkAndLoadExistingLocal(formData.year, formData.semester, formData.section, formData.examName, classes, formData.programme, val);
                 }} placeholder="e.g. CSE" className="text-input" />
+                <datalist id="dept-options">
+                  <option value="CSE" />
+                  <option value="AIDS" />
+                  <option value="AIML" />
+                  <option value="ECE" />
+                  <option value="EEE" />
+                  <option value="MECH" />
+                  <option value="CIVIL" />
+                  <option value="IT" />
+                  <option value="CSBS" />
+                  <option value="BME" />
+                  <option value="MCT" />
+                  <option value="CYS" />
+                </datalist>
               </div>
             </div>
 
@@ -2590,7 +2606,7 @@ export default function AdminPanel() {
             </div>
             <div className="input-group">
               <label className="input-label">Department</label>
-              <input value={formData.department} onChange={e => {
+              <input list="dept-options" value={formData.department} onChange={e => {
                 const val = e.target.value;
                 setFormData(prev => ({ ...prev, department: val }));
                 checkAndLoadExistingLocal(formData.year, formData.semester, formData.section, formData.examName, classes, formData.programme, val);
@@ -3707,6 +3723,7 @@ export default function AdminPanel() {
                 <div className="input-group">
                   <label className="input-label">Department</label>
                   <input 
+                    list="dept-options"
                     type="text" 
                     value={advisorFormData.department} 
                     onChange={e => setAdvisorFormData(prev => ({ ...prev, department: e.target.value }))}
@@ -4631,6 +4648,21 @@ export default function AdminPanel() {
            <SeatingManager />
         </div>
       )}
+
+      {/* ATTENDANCE TRACKER TAB */}
+      {activeTab === "attendance-tracker" && (
+        <div className="admin-grid-1col fade-in">
+           <AttendanceReportsContainer />
+        </div>
+      )}
+
+      {/* INTERNAL MARKS TEMPLATE TAB */}
+      {activeTab === "internal-marks" && (
+        <div className="admin-grid-1col fade-in">
+           <InternalMarkTemplateSetup />
+        </div>
+      )}
+
 
       {/* Pending Students Modal */}
       {selectedPendingData && (

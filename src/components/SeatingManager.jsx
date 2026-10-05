@@ -457,7 +457,21 @@ export default function SeatingManager() {
                  </div>
                  <div className="form-group" style={{ marginBottom: '1rem' }}>
                     <label className="input-label">Branch Name</label>
-                    <input type="text" className="text-input" value={branchName} onChange={e => setBranchName(e.target.value)} />
+                    <input list="branch-options" type="text" className="text-input" value={branchName} onChange={e => setBranchName(e.target.value)} />
+                    <datalist id="branch-options">
+                      <option value="CSE" />
+                      <option value="AIDS" />
+                      <option value="AIML" />
+                      <option value="ECE" />
+                      <option value="EEE" />
+                      <option value="MECH" />
+                      <option value="CIVIL" />
+                      <option value="IT" />
+                      <option value="CSBS" />
+                      <option value="BME" />
+                      <option value="MCT" />
+                      <option value="CYS" />
+                    </datalist>
                  </div>
                  <div className="form-group" style={{ marginBottom: '1rem' }}>
                     <label className="input-label">Header Image (Optional)</label>
