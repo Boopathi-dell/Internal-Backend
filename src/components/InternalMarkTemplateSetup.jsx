@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import API from "../api";
-import { Plus, Trash, Save, Settings, FileText, Calculator, X } from "lucide-react";
+import { Plus, Trash, Save, Settings, FileText, Calculator, X, Sigma } from "lucide-react";
+import { Check } from "lucide-react";
 
 export default function InternalMarkTemplateSetup() {
   const [templates, setTemplates] = useState([]);
@@ -26,7 +27,6 @@ export default function InternalMarkTemplateSetup() {
 
   const fetchAvailableExams = async () => {
     try {
-      // Just fetch some classes to extract unique exam names
       const res = await API.get("/api/classes");
       const uniqueExams = [...new Set(res.data.map(c => c.examName).filter(Boolean))];
       setAvailableExams(uniqueExams.length > 0 ? uniqueExams : ["UNIT I", "UNIT II", "UNIT III", "UNIT IV", "UNIT V", "CIA I", "CIA II", "CIA III"]);
@@ -41,21 +41,23 @@ export default function InternalMarkTemplateSetup() {
       templateName: "2025-26 ODD SEMESTER",
       isActive: false,
       columns: [
-        { heading: "UNIT I (30)", type: "exam", examName: "UNIT I", formula: "", calcSources: [], calcOutof: 110, calcWeightage: 10 }
+        { heading: "UNIT I (30)", type: "exam", examName: "UNIT I", formula: "", calcSources: [], calcType: "scale", calcOutof: 110, calcWeightage: 10 }
       ]
     });
   };
 
   const handleSaveTemplate = async () => {
     try {
-      // Convert calcSources array to a formula before saving so backend logic remains same
       const dataToSave = { ...editingTemplate };
       dataToSave.columns = dataToSave.columns.map(col => {
         if (col.type === "calculation") {
-          // generate formula like: (#[UNIT I] + #[UNIT II] + #[CIA I]) / 110 * 10
           const sumPart = col.calcSources.map(s => `#[${s}]`).join(" + ");
-          col.formula = `(${sumPart || '0'}) / ${col.calcOutof || 1} * ${col.calcWeightage || 1}`;
-          col.type = "formula"; // Backend expects "formula"
+          if (col.calcType === "sum") {
+            col.formula = `(${sumPart || '0'})`;
+          } else {
+            col.formula = `(${sumPart || '0'}) / ${col.calcOutof || 1} * ${col.calcWeightage || 1}`;
+          }
+          col.type = "formula"; 
         }
         return col;
       });
@@ -93,6 +95,7 @@ export default function InternalMarkTemplateSetup() {
         examName: "", 
         formula: "",
         calcSources: [],
+        calcType: "scale",
         calcOutof: 110,
         calcWeightage: 10
       }]
@@ -123,20 +126,28 @@ export default function InternalMarkTemplateSetup() {
   };
 
   const parseExistingFormula = (template) => {
-    // If editing, convert "formula" back to calc UI
     const cloned = { ...template };
     cloned.columns = cloned.columns.map(col => {
       if (col.type === "formula") {
         col.type = "calculation";
-        // Parse simple formula: (#[A] + #[B]) / outof * weight
-        const match = col.formula.match(/\((.*?)\)\s*\/\s*([\d.]+)\s*\*\s*([\d.]+)/);
-        if (match) {
-          const sources = [...match[1].matchAll(/#\[(.*?)\]/g)].map(m => m[1]);
-          col.calcSources = sources;
-          col.calcOutof = parseFloat(match[2]);
-          col.calcWeightage = parseFloat(match[3]);
+        // Check if it's a direct sum: e.g. (#[A] + #[B])
+        const scaleMatch = col.formula.match(/\((.*?)\)\s*\/\s*([\d.]+)\s*\*\s*([\d.]+)/);
+        const sumMatch = col.formula.match(/^\((.*?)\)$/);
+        
+        if (scaleMatch) {
+          col.calcSources = [...scaleMatch[1].matchAll(/#\[(.*?)\]/g)].map(m => m[1]);
+          col.calcType = "scale";
+          col.calcOutof = parseFloat(scaleMatch[2]);
+          col.calcWeightage = parseFloat(scaleMatch[3]);
+        } else if (sumMatch) {
+          col.calcSources = [...sumMatch[1].matchAll(/#\[(.*?)\]/g)].map(m => m[1]);
+          col.calcType = "sum";
+          col.calcOutof = 100;
+          col.calcWeightage = 10;
         } else {
+          // fallback
           col.calcSources = [];
+          col.calcType = "scale";
           col.calcOutof = 100;
           col.calcWeightage = 10;
         }
@@ -245,7 +256,7 @@ export default function InternalMarkTemplateSetup() {
                     <input 
                       type="text" 
                       className="input-field" 
-                      placeholder="E.g. UNIT I (30) or CIA I IM (10)" 
+                      placeholder="E.g. UNIT I (30) or TOTAL (40)" 
                       value={col.heading} 
                       onChange={(e) => handleColumnChange(index, 'heading', e.target.value)}
                     />
@@ -273,14 +284,22 @@ export default function InternalMarkTemplateSetup() {
                       <option value="SEMINAR">SEMINAR</option>
                       <option value="MKC">MKC</option>
                     </select>
-                    <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: "0.5rem" }}>
-                      This maps exactly to the exams created by staff.
-                    </p>
                   </div>
                 )}
 
                 {col.type === "calculation" && (
                   <div style={{ background: "var(--bg-main)", padding: "1rem", borderRadius: "8px", borderLeft: "4px solid #10b981" }}>
+                    <div style={{ marginBottom: "1rem", display: "flex", gap: "1rem" }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer", fontWeight: "bold" }}>
+                        <input type="radio" name={`calcType-${index}`} checked={col.calcType === "scale" || !col.calcType} onChange={() => handleColumnChange(index, 'calcType', 'scale')} />
+                        Convert & Scale (E.g. Convert to 10 marks)
+                      </label>
+                      <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer", fontWeight: "bold", color: "var(--primary)" }}>
+                        <input type="radio" name={`calcType-${index}`} checked={col.calcType === "sum"} onChange={() => handleColumnChange(index, 'calcType', 'sum')} />
+                        <Sigma size={16} /> Direct Sum (Final Total)
+                      </label>
+                    </div>
+
                     <label style={{ fontSize: "0.85rem", fontWeight: "bold", display: "block", marginBottom: "0.5rem" }}>1. Which columns should be added together?</label>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "1rem" }}>
                       {editingTemplate.columns.slice(0, index).map((prevCol, i) => (
@@ -304,20 +323,26 @@ export default function InternalMarkTemplateSetup() {
                       {index === 0 && <span style={{ fontSize: "0.85rem", color: "var(--danger)" }}>No previous columns available to add!</span>}
                     </div>
 
-                    <div style={{ display: "flex", gap: "1.5rem", alignItems: "center" }}>
-                      <div>
-                        <label style={{ fontSize: "0.85rem", fontWeight: "bold", display: "block", marginBottom: "0.5rem" }}>2. Total Max Marks of selected</label>
-                        <input type="number" className="input-field" value={col.calcOutof} onChange={(e) => handleColumnChange(index, 'calcOutof', e.target.value)} style={{ width: "150px" }} />
+                    {(!col.calcType || col.calcType === "scale") && (
+                      <div style={{ display: "flex", gap: "1.5rem", alignItems: "center", marginTop: "1rem" }}>
+                        <div>
+                          <label style={{ fontSize: "0.85rem", fontWeight: "bold", display: "block", marginBottom: "0.5rem" }}>2. Total Max Marks of selected</label>
+                          <input type="number" className="input-field" value={col.calcOutof} onChange={(e) => handleColumnChange(index, 'calcOutof', e.target.value)} style={{ width: "150px" }} />
+                        </div>
+                        <div style={{ fontSize: "1.5rem", color: "var(--text-muted)", marginTop: "1.5rem" }}>👉</div>
+                        <div>
+                          <label style={{ fontSize: "0.85rem", fontWeight: "bold", display: "block", marginBottom: "0.5rem" }}>3. Convert to Weightage</label>
+                          <input type="number" className="input-field" value={col.calcWeightage} onChange={(e) => handleColumnChange(index, 'calcWeightage', e.target.value)} style={{ width: "150px" }} />
+                        </div>
                       </div>
-                      <div style={{ fontSize: "1.5rem", color: "var(--text-muted)", marginTop: "1.5rem" }}>👉</div>
-                      <div>
-                        <label style={{ fontSize: "0.85rem", fontWeight: "bold", display: "block", marginBottom: "0.5rem" }}>3. Convert to Weightage</label>
-                        <input type="number" className="input-field" value={col.calcWeightage} onChange={(e) => handleColumnChange(index, 'calcWeightage', e.target.value)} style={{ width: "150px" }} />
-                      </div>
-                    </div>
+                    )}
                     
                     <div style={{ marginTop: "1rem", padding: "10px", background: "rgba(16, 185, 129, 0.1)", color: "#10b981", borderRadius: "6px", fontSize: "0.85rem", fontWeight: "bold" }}>
-                      Formula: ( Sum of Selected ) / {col.calcOutof} × {col.calcWeightage}
+                      {col.calcType === "sum" ? (
+                        <>Formula: Sum of Selected Columns</>
+                      ) : (
+                        <>Formula: ( Sum of Selected ) / {col.calcOutof} × {col.calcWeightage}</>
+                      )}
                     </div>
                   </div>
                 )}
@@ -343,6 +368,3 @@ export default function InternalMarkTemplateSetup() {
     </div>
   );
 }
-
-// ensure Check is imported
-import { Check } from "lucide-react";
