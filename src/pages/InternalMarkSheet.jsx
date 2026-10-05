@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from "react";
 import API from "../api";
-import { Search, Printer, AlertTriangle, FileSpreadsheet, CheckCircle2 } from "lucide-react";
-import * as XLSX from "xlsx";
+import { Search, Printer, AlertTriangle, FileSpreadsheet, CheckCircle2, Type } from "lucide-react";
 
 export default function InternalMarkSheet() {
   const [formData, setFormData] = useState({
@@ -11,6 +10,9 @@ export default function InternalMarkSheet() {
     year: "IV",
     semester: "VII",
     section: "A",
+    selectedSubject: "",
+    customSubject: "",
+    isCustomSubject: false,
   });
   
   const [template, setTemplate] = useState(null);
@@ -18,9 +20,11 @@ export default function InternalMarkSheet() {
   const [subjects, setSubjects] = useState([]);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+  const [rosters, setRosters] = useState([]);
   
   useEffect(() => {
     fetchActiveTemplate();
+    fetchAllRosters();
   }, []);
   
   const fetchActiveTemplate = async () => {
@@ -33,19 +37,29 @@ export default function InternalMarkSheet() {
       setErrorMsg("Failed to fetch template.");
     }
   };
+
+  const fetchAllRosters = async () => {
+    try {
+      const res = await API.get("/api/rosters");
+      setRosters(res.data);
+    } catch (err) {
+      console.error("Failed to fetch rosters");
+    }
+  };
   
-  const processSubjectData = async (subjectClass, currentTemplate) => {
+  const processSubjectData = async (config, currentTemplate) => {
     setLoading(true);
     try {
-      const yearSemSec = `${formData.year}/${formData.semester}/${formData.section}`;
+      const yearSemSec = `${config.year}/${config.semester}/${config.section}`;
       const res = await API.get(`/api/classes`);
       
       const allClasses = res.data.filter(c => 
-        c.department === formData.department && 
+        c.department === config.department && 
         c.yearSemSec === yearSemSec
       );
       
-      const subjectToProcess = formData.selectedSubject;
+      const subjectToProcess = config.isCustomSubject ? config.customSubject : config.selectedSubject;
+      
       if (!subjectToProcess) {
         setStudentsData([]);
         setLoading(false);
@@ -55,7 +69,26 @@ export default function InternalMarkSheet() {
       const subjectExams = allClasses.filter(c => c.subjects && c.subjects[0] === subjectToProcess);
       
       const studentMap = {};
+
+      // 1. Initialize map from Roster so we get ALL students even if 0 marks uploaded
+      const matchingRoster = rosters.find(r => 
+        r.department === config.department && 
+        r.year === config.year && 
+        r.semester === config.semester && 
+        r.section === config.section
+      );
+
+      if (matchingRoster && matchingRoster.students) {
+        matchingRoster.students.forEach(student => {
+          studentMap[student.regNo] = {
+            regNo: student.regNo,
+            name: student.name,
+            exams: {}
+          };
+        });
+      }
       
+      // 2. Populate with actual exam marks if they exist
       subjectExams.forEach(examObj => {
         const examName = examObj.examName;
         examObj.students.forEach(student => {
@@ -71,22 +104,26 @@ export default function InternalMarkSheet() {
         });
       });
       
+      // 3. Evaluate formulas
       const evaluatedStudents = Object.values(studentMap).map(student => {
         const row = { ...student };
         
         currentTemplate.columns.forEach(col => {
           if (col.type === "exam") {
             row[col.heading] = student.exams[col.examName] || 0;
-          } else if (col.type === "formula") {
+          } else if (col.type === "formula" || col.type === "calculation") {
             try {
               let formulaStr = col.formula;
+              // Provide fallback if formula string is empty
+              if (!formulaStr) formulaStr = "0";
+
               currentTemplate.columns.forEach(innerCol => {
                 const val = row[innerCol.heading] || 0;
                 const numVal = isNaN(Number(val)) ? 0 : Number(val);
                 formulaStr = formulaStr.split(`#[${innerCol.heading}]`).join(numVal);
               });
               const evaluated = new Function(`return ${formulaStr}`)();
-              row[col.heading] = Math.round(evaluated);
+              row[col.heading] = isNaN(evaluated) ? 0 : Math.round(evaluated);
             } catch (e) {
               row[col.heading] = 0;
             }
@@ -105,11 +142,17 @@ export default function InternalMarkSheet() {
     setLoading(false);
   };
   
-  const handleSubjectChange = async (subjectName) => {
-    setFormData(prev => ({ ...prev, selectedSubject: subjectName }));
-    if (template) {
-      await processSubjectData({ ...formData, selectedSubject: subjectName }, template);
+  const handleSubjectDropdownChange = (e) => {
+    const val = e.target.value;
+    if (val === "CUSTOM") {
+      setFormData(prev => ({ ...prev, selectedSubject: "CUSTOM", isCustomSubject: true }));
+    } else {
+      setFormData(prev => ({ ...prev, selectedSubject: val, isCustomSubject: false, customSubject: "" }));
     }
+  };
+
+  const handleCustomSubjectChange = (e) => {
+    setFormData(prev => ({ ...prev, customSubject: e.target.value }));
   };
   
   const fetchSubjectsForSelection = async () => {
@@ -126,10 +169,9 @@ export default function InternalMarkSheet() {
       setSubjects(distinctSubjects);
       
       if (distinctSubjects.length > 0) {
-        setFormData(prev => ({ ...prev, selectedSubject: distinctSubjects[0] }));
+        setFormData(prev => ({ ...prev, selectedSubject: distinctSubjects[0], isCustomSubject: false, customSubject: "" }));
       } else {
-        setFormData(prev => ({ ...prev, selectedSubject: "" }));
-        setStudentsData([]);
+        setFormData(prev => ({ ...prev, selectedSubject: "CUSTOM", isCustomSubject: true, customSubject: "" }));
       }
     } catch(e) { console.error(e); }
   };
@@ -138,14 +180,22 @@ export default function InternalMarkSheet() {
     fetchSubjectsForSelection();
   }, [formData.department, formData.year, formData.semester, formData.section]);
   
+  // Trigger update when form data changes (and is ready)
   useEffect(() => {
-    if (formData.selectedSubject && template) {
-      processSubjectData(formData, template);
+    if (template && (formData.selectedSubject !== "CUSTOM" || formData.customSubject.length > 2)) {
+      const delayDebounceFn = setTimeout(() => {
+        processSubjectData(formData, template);
+      }, 500); // 500ms debounce for custom subject typing
+      return () => clearTimeout(delayDebounceFn);
     }
-  }, [formData.selectedSubject, template]);
+  }, [formData.selectedSubject, formData.customSubject, formData.isCustomSubject, template, rosters]);
 
   const handlePrint = () => {
     window.print();
+  };
+
+  const getDisplaySubjectName = () => {
+    return formData.isCustomSubject ? formData.customSubject : formData.selectedSubject;
   };
 
   return (
@@ -223,17 +273,36 @@ export default function InternalMarkSheet() {
             </div>
           </div>
           
-          <div style={{ marginTop: "1.5rem", paddingTop: "1.5rem", borderTop: "1px dashed var(--border-color)" }}>
-            <label style={{ display: "block", fontSize: "0.85rem", fontWeight: "bold", marginBottom: "0.5rem", color: "var(--primary)" }}>Target Subject</label>
-            <select 
-              className="input-field" 
-              value={formData.selectedSubject || ""} 
-              onChange={e => handleSubjectChange(e.target.value)}
-              style={{ maxWidth: "400px", border: "1px solid var(--primary)", background: "rgba(99, 102, 241, 0.05)" }}
-            >
-              {subjects.length === 0 && <option value="">No subjects found for this class</option>}
-              {subjects.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
+          <div style={{ marginTop: "1.5rem", paddingTop: "1.5rem", borderTop: "1px dashed var(--border-color)", display: "flex", gap: "1rem", alignItems: "flex-end" }}>
+            <div style={{ flex: 1, maxWidth: "300px" }}>
+              <label style={{ display: "block", fontSize: "0.85rem", fontWeight: "bold", marginBottom: "0.5rem", color: "var(--primary)" }}>Target Subject</label>
+              <select 
+                className="input-field" 
+                value={formData.selectedSubject || ""} 
+                onChange={handleSubjectDropdownChange}
+                style={{ border: "1px solid var(--primary)", background: "rgba(99, 102, 241, 0.05)" }}
+              >
+                {subjects.map(s => <option key={s} value={s}>{s}</option>)}
+                <option value="CUSTOM">+ Type Custom Subject</option>
+              </select>
+            </div>
+            
+            {formData.isCustomSubject && (
+              <div style={{ flex: 1, maxWidth: "300px", animation: "fadeIn 0.3s ease-out" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "0.85rem", fontWeight: "bold", marginBottom: "0.5rem", color: "var(--primary)" }}>
+                  <Type size={14} /> Enter Subject Code
+                </label>
+                <input 
+                  type="text" 
+                  className="input-field" 
+                  placeholder="E.g. 25CSS31"
+                  value={formData.customSubject}
+                  onChange={handleCustomSubjectChange}
+                  style={{ border: "1px solid var(--primary)", background: "rgba(99, 102, 241, 0.05)" }}
+                  autoFocus
+                />
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -241,7 +310,7 @@ export default function InternalMarkSheet() {
       {loading && (
         <div className="no-print" style={{ textAlign: "center", padding: "3rem", color: "var(--text-muted)" }}>
           <div style={{ width: "40px", height: "40px", border: "4px solid rgba(99,102,241,0.2)", borderTop: "4px solid var(--primary)", borderRadius: "50%", animation: "spin 1s linear infinite", margin: "0 auto 1rem auto" }}></div>
-          Loading student marks...
+          Calculating internal marks...
         </div>
       )}
 
@@ -296,7 +365,7 @@ export default function InternalMarkSheet() {
               <tr>
                 <th rowSpan="2" style={{ width: "40px" }}>S.No</th>
                 <th rowSpan="2" style={{ width: "100px" }}>Register No.</th>
-                <th className="text-left" style={{ minWidth: "200px" }}>Name of the Subject: <span style={{ fontWeight: "normal" }}>{formData.selectedSubject}</span></th>
+                <th className="text-left" style={{ minWidth: "200px" }}>Name of the Subject: <span style={{ fontWeight: "normal" }}>{getDisplaySubjectName()}</span></th>
                 {template.columns.map((col, idx) => (
                   <th key={idx} rowSpan="2">{col.heading}</th>
                 ))}
@@ -313,7 +382,6 @@ export default function InternalMarkSheet() {
                   <td className="text-left" style={{ fontWeight: "600" }}>{student.name}</td>
                   {template.columns.map((col, colIdx) => {
                     const val = student[col.heading];
-                    // Highlight failures (below passing logic could be dynamic, but simply highlighting 0 is safe for now or we can just leave it normal)
                     return (
                       <td key={colIdx} style={{ fontWeight: col.type === "calculation" || col.type === "formula" ? "bold" : "normal" }}>
                         {val !== undefined ? val : "-"}
@@ -334,10 +402,10 @@ export default function InternalMarkSheet() {
         </div>
       )}
       
-      {!loading && formData.selectedSubject && studentsData.length === 0 && template && (
+      {!loading && getDisplaySubjectName() && studentsData.length === 0 && template && (
         <div className="no-print" style={{ textAlign: "center", padding: "3rem", background: "var(--bg-secondary)", borderRadius: "12px", border: "1px dashed var(--border-color)" }}>
-          <p style={{ color: "var(--text-muted)", fontSize: "1.1rem" }}>No students or marks found for this subject.</p>
-          <p style={{ fontSize: "0.9rem", color: "var(--text-muted)" }}>Ensure that marks have been entered for this class.</p>
+          <p style={{ color: "var(--text-muted)", fontSize: "1.1rem" }}>No students found in the Roster for this class.</p>
+          <p style={{ fontSize: "0.9rem", color: "var(--text-muted)" }}>Please ask the admin to upload the Student Roster for {formData.year}/{formData.semester}/{formData.section} so we can generate empty marksheets.</p>
         </div>
       )}
     </div>
