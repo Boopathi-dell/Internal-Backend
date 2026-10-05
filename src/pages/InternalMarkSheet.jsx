@@ -38,8 +38,12 @@ export default function InternalMarkSheet() {
     setLoading(true);
     try {
       const yearSemSec = `${formData.year}/${formData.semester}/${formData.section}`;
-      const res = await API.get(`/api/classes?department=${formData.department}&yearSemSec=${yearSemSec}`);
-      const allClasses = res.data;
+      const res = await API.get(`/api/classes`);
+      
+      const allClasses = res.data.filter(c => 
+        c.department === formData.department && 
+        c.yearSemSec === yearSemSec
+      );
       
       const subjectToProcess = formData.selectedSubject;
       if (!subjectToProcess) {
@@ -111,10 +115,14 @@ export default function InternalMarkSheet() {
   const fetchSubjectsForSelection = async () => {
     try {
       const yearSemSec = `${formData.year}/${formData.semester}/${formData.section}`;
-      const res = await API.get(`/api/classes?department=${formData.department}&yearSemSec=${yearSemSec}`);
-      const allClasses = res.data;
+      const res = await API.get(`/api/classes`);
       
-      const distinctSubjects = [...new Set(allClasses.map(c => c.subjects && c.subjects[0]).filter(Boolean))];
+      const filteredClasses = res.data.filter(c => 
+        c.department === formData.department && 
+        c.yearSemSec === yearSemSec
+      );
+      
+      const distinctSubjects = [...new Set(filteredClasses.map(c => c.subjects && c.subjects[0]).filter(Boolean))];
       setSubjects(distinctSubjects);
       
       if (distinctSubjects.length > 0) {
