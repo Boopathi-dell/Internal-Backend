@@ -15,7 +15,12 @@ router.get("/", async (req, res) => {
 // Get active template
 router.get("/active", async (req, res) => {
   try {
-    const template = await InternalMarkTemplate.findOne({ isActive: true });
+    const regulation = req.query.regulation;
+    const query = { isActive: true };
+    if (regulation) {
+      query.regulation = regulation;
+    }
+    const template = await InternalMarkTemplate.findOne(query);
     res.json(template);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -25,11 +30,13 @@ router.get("/active", async (req, res) => {
 // Create new template
 router.post("/", async (req, res) => {
   try {
-    const { templateName, columns, isActive } = req.body;
-    if (isActive) {
+    const { templateName, regulation, columns, isActive } = req.body;
+    if (isActive && regulation) {
+      await InternalMarkTemplate.updateMany({ regulation }, { isActive: false });
+    } else if (isActive) {
       await InternalMarkTemplate.updateMany({}, { isActive: false });
     }
-    const newTemplate = new InternalMarkTemplate({ templateName, columns, isActive });
+    const newTemplate = new InternalMarkTemplate({ templateName, regulation, columns, isActive });
     await newTemplate.save();
     res.json(newTemplate);
   } catch (err) {
@@ -40,13 +47,15 @@ router.post("/", async (req, res) => {
 // Update template
 router.put("/:id", async (req, res) => {
   try {
-    const { templateName, columns, isActive } = req.body;
-    if (isActive) {
+    const { templateName, regulation, columns, isActive } = req.body;
+    if (isActive && regulation) {
+      await InternalMarkTemplate.updateMany({ regulation }, { isActive: false });
+    } else if (isActive) {
       await InternalMarkTemplate.updateMany({}, { isActive: false });
     }
     const updated = await InternalMarkTemplate.findByIdAndUpdate(
       req.params.id,
-      { templateName, columns, isActive },
+      { templateName, regulation, columns, isActive },
       { new: true }
     );
     res.json(updated);
