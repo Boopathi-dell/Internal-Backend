@@ -173,24 +173,31 @@ export default function InternalMarkSheet() {
         c.yearSemSec === yearSemSec
       );
       
-      const distinctSubjectCodes = [...new Set(filteredClasses.map(c => c.subjects && c.subjects[0]).filter(Boolean))];
-      
-      // Build a map of courseCode -> courseName from courseDetails across all filtered classes
       const courseMap = {};
+      const allCourseCodes = new Set();
+      
       filteredClasses.forEach(c => {
+        // Collect from courseDetails (which contains all subjects for that sem usually)
         if (c.courseDetails && Array.isArray(c.courseDetails)) {
           c.courseDetails.forEach(cd => {
             if (cd.courseCode && cd.courseName) {
               courseMap[cd.courseCode] = cd.courseName;
+              allCourseCodes.add(cd.courseCode);
             }
           });
         }
+        // Fallback: also add the main exam subject
+        if (c.subjects && c.subjects[0]) {
+          allCourseCodes.add(c.subjects[0]);
+        }
       });
+
+      const distinctSubjectCodes = [...allCourseCodes];
 
       const subjectsWithNames = distinctSubjectCodes.map(code => ({
         code: code,
         name: courseMap[code] || "Unknown Subject Name"
-      }));
+      })).sort((a, b) => a.code.localeCompare(b.code));
 
       setSubjects(subjectsWithNames);
       
