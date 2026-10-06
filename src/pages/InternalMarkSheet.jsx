@@ -74,7 +74,7 @@ export default function InternalMarkSheet() {
         return;
       }
       
-      const subjectExams = allClasses.filter(c => c.subjects && c.subjects[0] === subjectToProcess);
+      const subjectExams = allClasses.filter(c => c.subjects && c.subjects[0] && c.subjects[0].trim() === subjectToProcess.trim());
       
       const studentMap = {};
 
@@ -181,14 +181,15 @@ export default function InternalMarkSheet() {
         if (c.courseDetails && Array.isArray(c.courseDetails)) {
           c.courseDetails.forEach(cd => {
             if (cd.courseCode && cd.courseName) {
-              courseMap[cd.courseCode] = cd.courseName;
-              allCourseCodes.add(cd.courseCode);
+              const code = cd.courseCode.trim();
+              courseMap[code] = cd.courseName.trim();
+              allCourseCodes.add(code);
             }
           });
         }
         // Fallback: also add the main exam subject
         if (c.subjects && c.subjects[0]) {
-          allCourseCodes.add(c.subjects[0]);
+          allCourseCodes.add(c.subjects[0].trim());
         }
       });
 
