@@ -39,6 +39,7 @@ export default function InternalMarkTemplateSetup() {
   const handleAddNewTemplate = () => {
     setEditingTemplate({
       templateName: "2025-26 ODD SEMESTER",
+      regulation: "2021",
       isActive: false,
       columns: [
         { heading: "UNIT I (30)", type: "exam", examName: "UNIT I", formula: "", calcSources: [], calcType: "scale", calcOutof: 110, calcWeightage: 10 }
@@ -173,6 +174,7 @@ export default function InternalMarkTemplateSetup() {
             <thead>
               <tr>
                 <th>Template Name</th>
+                <th>Regulation</th>
                 <th>Status</th>
                 <th>Columns</th>
                 <th>Actions</th>
@@ -182,6 +184,7 @@ export default function InternalMarkTemplateSetup() {
               {templates.map(t => (
                 <tr key={t._id}>
                   <td style={{ fontWeight: "bold" }}>{t.templateName}</td>
+                  <td>{t.regulation || "N/A"}</td>
                   <td>
                     {t.isActive ? 
                       <span style={{ background: "rgba(34, 197, 94, 0.2)", color: "#16a34a", padding: "4px 8px", borderRadius: "4px", fontWeight: "bold", fontSize: "0.8rem" }}>Active</span> 
@@ -215,6 +218,17 @@ export default function InternalMarkTemplateSetup() {
                   onChange={(e) => setEditingTemplate({ ...editingTemplate, templateName: e.target.value })}
                   style={{ fontSize: "1.1rem", padding: "10px" }}
                 />
+              </div>
+              <div style={{ width: "200px" }}>
+                <label style={{ display: "block", fontSize: "0.85rem", fontWeight: "bold", marginBottom: "0.5rem" }}>Regulation</label>
+                <select 
+                  className="input-field" 
+                  value={editingTemplate.regulation || "2021"}
+                  onChange={(e) => setEditingTemplate({ ...editingTemplate, regulation: e.target.value })}
+                  style={{ fontSize: "1.1rem", padding: "10px" }}
+                >
+                  {["2019", "2021", "2025"].map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
               </div>
               <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", background: "rgba(99, 102, 241, 0.1)", padding: "10px 15px", borderRadius: "8px", cursor: "pointer", border: "1px solid var(--primary)", color: "var(--primary)", fontWeight: "bold", marginTop: "20px" }}>
                 <input 

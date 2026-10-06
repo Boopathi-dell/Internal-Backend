@@ -23,15 +23,23 @@ export default function InternalMarkSheet() {
   const [rosters, setRosters] = useState([]);
   
   useEffect(() => {
-    fetchActiveTemplate();
+    if (formData.regulation) {
+      fetchActiveTemplate(formData.regulation);
+    }
+  }, [formData.regulation]);
+
+  useEffect(() => {
     fetchAllRosters();
   }, []);
   
-  const fetchActiveTemplate = async () => {
+  const fetchActiveTemplate = async (reg) => {
     try {
-      const res = await API.get("/api/internal-marks/active");
+      const res = await API.get(`/api/internal-marks/active?regulation=${reg}`);
       if (res.data) setTemplate(res.data);
-      else setErrorMsg("No active Internal Mark Template is configured by the Admin.");
+      else { 
+        setTemplate(null);
+        setErrorMsg(`No active template found for Regulation ${reg}.`); 
+      }
     } catch (err) {
       console.error(err);
       setErrorMsg("Failed to fetch template.");
@@ -188,7 +196,7 @@ export default function InternalMarkSheet() {
       }, 500); // 500ms debounce for custom subject typing
       return () => clearTimeout(delayDebounceFn);
     }
-  }, [formData.selectedSubject, formData.customSubject, formData.isCustomSubject, template, rosters]);
+  }, [formData.selectedSubject, formData.customSubject, formData.isCustomSubject, formData.department, formData.year, formData.semester, formData.section, formData.regulation, formData.academicYear, template, rosters]);
 
   const handlePrint = () => {
     window.print();
@@ -224,7 +232,7 @@ export default function InternalMarkSheet() {
             <AlertTriangle size={28} />
             <div>
               <h3 style={{ margin: "0 0 0.25rem 0", fontWeight: "bold" }}>Configuration Required</h3>
-              <p style={{ margin: 0, fontSize: "0.9rem" }}>No active template found. Please ask the Administrator to configure an active Internal Mark Template in the Admin Panel.</p>
+              <p style={{ margin: 0, fontSize: "0.9rem" }}>No active template found for Regulation {formData.regulation}. Please ask the Administrator to configure an active Internal Mark Template in the Admin Panel.</p>
             </div>
           </div>
         ) : (
