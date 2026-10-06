@@ -267,9 +267,17 @@ export default function InternalMarkSheet() {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: "1.5rem" }}>
             <div>
               <label style={{ display: "block", fontSize: "0.85rem", fontWeight: "bold", marginBottom: "0.5rem", color: "var(--text-muted)" }}>Regulation</label>
-              <select className="input-field" value={formData.regulation} onChange={e => setFormData({...formData, regulation: e.target.value})}>
+              <input 
+                type="text"
+                list="reg-options-sheet"
+                className="input-field" 
+                value={formData.regulation} 
+                onChange={e => setFormData({...formData, regulation: e.target.value})} 
+                placeholder="E.g. 2021"
+              />
+              <datalist id="reg-options-sheet">
                 {["2019", "2021", "2025"].map(r => <option key={r} value={r}>{r}</option>)}
-              </select>
+              </datalist>
             </div>
             <div>
               <label style={{ display: "block", fontSize: "0.85rem", fontWeight: "bold", marginBottom: "0.5rem", color: "var(--text-muted)" }}>Academic Year</label>
