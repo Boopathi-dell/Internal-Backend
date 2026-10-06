@@ -17,7 +17,7 @@ export default function InternalMarkSheet() {
   
   const [template, setTemplate] = useState(null);
   const [studentsData, setStudentsData] = useState([]);
-  const [subjects, setSubjects] = useState([]);
+  const [subjects, setSubjects] = useState([]); // array of objects { code, name }
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [rosters, setRosters] = useState([]);
@@ -173,11 +173,29 @@ export default function InternalMarkSheet() {
         c.yearSemSec === yearSemSec
       );
       
-      const distinctSubjects = [...new Set(filteredClasses.map(c => c.subjects && c.subjects[0]).filter(Boolean))];
-      setSubjects(distinctSubjects);
+      const distinctSubjectCodes = [...new Set(filteredClasses.map(c => c.subjects && c.subjects[0]).filter(Boolean))];
       
-      if (distinctSubjects.length > 0) {
-        setFormData(prev => ({ ...prev, selectedSubject: distinctSubjects[0], isCustomSubject: false, customSubject: "" }));
+      // Build a map of courseCode -> courseName from courseDetails across all filtered classes
+      const courseMap = {};
+      filteredClasses.forEach(c => {
+        if (c.courseDetails && Array.isArray(c.courseDetails)) {
+          c.courseDetails.forEach(cd => {
+            if (cd.courseCode && cd.courseName) {
+              courseMap[cd.courseCode] = cd.courseName;
+            }
+          });
+        }
+      });
+
+      const subjectsWithNames = distinctSubjectCodes.map(code => ({
+        code: code,
+        name: courseMap[code] || "Unknown Subject Name"
+      }));
+
+      setSubjects(subjectsWithNames);
+      
+      if (subjectsWithNames.length > 0) {
+        setFormData(prev => ({ ...prev, selectedSubject: subjectsWithNames[0].code, isCustomSubject: false, customSubject: "" }));
       } else {
         setFormData(prev => ({ ...prev, selectedSubject: "CUSTOM", isCustomSubject: true, customSubject: "" }));
       }
@@ -203,7 +221,9 @@ export default function InternalMarkSheet() {
   };
 
   const getDisplaySubjectName = () => {
-    return formData.isCustomSubject ? formData.customSubject : formData.selectedSubject;
+    if (formData.isCustomSubject) return formData.customSubject;
+    const foundSubject = subjects.find(s => s.code === formData.selectedSubject);
+    return foundSubject ? `${foundSubject.code} - ${foundSubject.name}` : formData.selectedSubject;
   };
 
   return (
@@ -290,7 +310,7 @@ export default function InternalMarkSheet() {
                 onChange={handleSubjectDropdownChange}
                 style={{ border: "1px solid var(--primary)", background: "rgba(99, 102, 241, 0.05)" }}
               >
-                {subjects.map(s => <option key={s} value={s}>{s}</option>)}
+                {subjects.map(s => <option key={s.code} value={s.code}>{s.code} - {s.name}</option>)}
                 <option value="CUSTOM">+ Type Custom Subject</option>
               </select>
             </div>
