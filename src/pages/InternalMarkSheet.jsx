@@ -74,7 +74,10 @@ export default function InternalMarkSheet() {
         return;
       }
       
-      const subjectExams = allClasses.filter(c => c.subjects && c.subjects[0] && c.subjects[0].trim() === subjectToProcess.trim());
+      const subjectExams = allClasses.filter(c => {
+        if (!c.subjects) return false;
+        return c.subjects.some(s => s && s.trim() === subjectToProcess.trim());
+      });
       
       const studentMap = {};
 
@@ -98,18 +101,24 @@ export default function InternalMarkSheet() {
       
       // 2. Populate with actual exam marks if they exist
       subjectExams.forEach(examObj => {
-        const examName = examObj.examName;
-        examObj.students.forEach(student => {
-          if (!studentMap[student.regNo]) {
-            studentMap[student.regNo] = {
-              regNo: student.regNo,
-              name: student.name,
-              exams: {}
-            };
-          }
-          const markVal = student.marks && student.marks.length > 0 ? student.marks[0] : "AB";
-          studentMap[student.regNo].exams[examName] = markVal;
-        });
+        const examName = examObj.examName ? examObj.examName.trim() : "";
+        // Find the correct index of this subject in the class's subjects array
+        const subjectIndex = examObj.subjects.findIndex(s => s && s.trim() === subjectToProcess.trim());
+        
+        if (subjectIndex !== -1) {
+          examObj.students.forEach(student => {
+            if (!studentMap[student.regNo]) {
+              studentMap[student.regNo] = {
+                regNo: student.regNo,
+                name: student.name,
+                exams: {}
+              };
+            }
+            const markVal = student.marks && student.marks.length > subjectIndex ? student.marks[subjectIndex] : "AB";
+            // Check if markVal is an empty string, if so treat as AB or 0
+            studentMap[student.regNo].exams[examName] = markVal === "" ? "AB" : markVal;
+          });
+        }
       });
       
       // 3. Evaluate formulas
@@ -118,7 +127,8 @@ export default function InternalMarkSheet() {
         
         currentTemplate.columns.forEach(col => {
           if (col.type === "exam") {
-            row[col.heading] = student.exams[col.examName] || 0;
+            const trimmedColExamName = col.examName ? col.examName.trim() : "";
+            row[col.heading] = student.exams[trimmedColExamName] || 0;
           } else if (col.type === "formula" || col.type === "calculation") {
             try {
               let formulaStr = col.formula;
