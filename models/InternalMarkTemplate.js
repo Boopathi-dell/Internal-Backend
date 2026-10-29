@@ -11,6 +11,7 @@ const internalMarkTemplateSchema = new mongoose.Schema({
   templateName: { type: String, required: true },
   regulation: { type: String, required: true },
   isActive: { type: Boolean, default: true },
+  headerImage: { type: String, default: "" },
   columns: [columnSchema],
   createdAt: { type: Date, default: Date.now }
 });

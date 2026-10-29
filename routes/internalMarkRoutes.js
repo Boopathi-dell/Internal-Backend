@@ -27,16 +27,44 @@ router.get("/active", async (req, res) => {
   }
 });
 
+// Get shared header image
+router.get("/header-image", async (req, res) => {
+  try {
+    const templateWithHeader = await InternalMarkTemplate.findOne({ headerImage: { $ne: "" } }).sort({ createdAt: -1 });
+    res.json({ headerImage: templateWithHeader ? templateWithHeader.headerImage : "" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Save shared header image
+router.post("/header-image", async (req, res) => {
+  try {
+    const { headerImage } = req.body;
+    // Update all active templates or most recent with this headerImage
+    await InternalMarkTemplate.updateMany({}, { headerImage });
+    res.json({ success: true, headerImage });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Create new template
 router.post("/", async (req, res) => {
   try {
-    const { templateName, regulation, columns, isActive } = req.body;
+    const { templateName, regulation, columns, isActive, headerImage } = req.body;
     if (isActive && regulation) {
       await InternalMarkTemplate.updateMany({ regulation }, { isActive: false });
     } else if (isActive) {
       await InternalMarkTemplate.updateMany({}, { isActive: false });
     }
-    const newTemplate = new InternalMarkTemplate({ templateName, regulation, columns, isActive });
+    const newTemplate = new InternalMarkTemplate({ 
+      templateName, 
+      regulation, 
+      columns, 
+      isActive,
+      headerImage: headerImage || ""
+    });
     await newTemplate.save();
     res.json(newTemplate);
   } catch (err) {
@@ -47,7 +75,7 @@ router.post("/", async (req, res) => {
 // Update template
 router.put("/:id", async (req, res) => {
   try {
-    const { templateName, regulation, columns, isActive } = req.body;
+    const { templateName, regulation, columns, isActive, headerImage } = req.body;
     if (isActive && regulation) {
       await InternalMarkTemplate.updateMany({ regulation }, { isActive: false });
     } else if (isActive) {
@@ -55,7 +83,7 @@ router.put("/:id", async (req, res) => {
     }
     const updated = await InternalMarkTemplate.findByIdAndUpdate(
       req.params.id,
-      { templateName, regulation, columns, isActive },
+      { templateName, regulation, columns, isActive, ...(headerImage !== undefined ? { headerImage } : {}) },
       { new: true }
     );
     res.json(updated);
