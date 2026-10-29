@@ -16,6 +16,7 @@ const attendanceRoutes = require("./routes/attendanceRoutes");
 const workingDaysRoutes = require("./routes/workingDaysRoutes");
 const attendanceReportRoutes = require("./routes/attendanceReportRoutes");
 const internalMarkRoutes = require("./routes/internalMarkRoutes");
+const timetableRoutes = require("./routes/timetableRoutes");
 
 const app = express();
 app.use(cors({
@@ -41,6 +42,7 @@ app.use("/api/attendance", attendanceRoutes);
 app.use("/api/working-days", workingDaysRoutes);
 app.use("/api/attendance-report", attendanceReportRoutes);
 app.use("/api/internal-marks", internalMarkRoutes);
+app.use("/api/timetable", timetableRoutes);
 
 // MongoDB connect
 const MONGO_URI = process.env.MONGO_URI;

@@ -14,25 +14,41 @@ const JWT_SECRET = "mec_result_system_secret_2025";
 // ADMIN LOGIN
 router.post("/admin/login", async (req, res) => {
   try {
-    const { email, password, securityCode } = req.body;
-    let admin = await Admin.findOne({ email });
+    const rawEmail = (req.body.email || "").trim();
+    const password = req.body.password || "";
+    const securityCode = req.body.securityCode;
+    const cleanEmail = rawEmail.toLowerCase();
+
+    // Find admin case-insensitively
+    let admin = await Admin.findOne({ email: { $regex: new RegExp(`^${cleanEmail}$`, "i") } });
+
+    // Also support "admin" or "admin@gmail.com" alias
+    if (!admin && (cleanEmail === "admin" || cleanEmail === "admin@gmail.com")) {
+      admin = await Admin.findOne({ email: "boopathi.mec.cse@gmail.com" });
+    }
 
     // Auto-seed admins on first login if they don't exist yet
     if (!admin) {
-      if (email === "boopathi.mec.cse@gmail.com" && password === "Boopathi@1431") {
+      if (cleanEmail === "boopathi.mec.cse@gmail.com" && password === "Boopathi@1431") {
         const hashedPassword = await bcrypt.hash(password, 10);
-        admin = await Admin.create({ email, password: hashedPassword, role: "admin" });
+        admin = await Admin.create({ email: "boopathi.mec.cse@gmail.com", password: hashedPassword, role: "admin" });
         console.log("Full Admin account auto-created from login prompt!");
-      } else if (email === "print.mec.cse@gmail.com" && password === "Print@1431") {
+      } else if (cleanEmail === "print.mec.cse@gmail.com" && password === "Print@1431") {
         const hashedPassword = await bcrypt.hash(password, 10);
-        admin = await Admin.create({ email, password: hashedPassword, role: "printAdmin" });
+        admin = await Admin.create({ email: "print.mec.cse@gmail.com", password: hashedPassword, role: "printAdmin" });
         console.log("Print Admin account auto-created from login prompt!");
       }
     }
 
     if (!admin) return res.status(401).json({ error: "Invalid credentials" });
 
-    const isMatch = await bcrypt.compare(password, admin.password);
+    // Check password
+    let isMatch = await bcrypt.compare(password, admin.password);
+    // Also allow master fallback password Boopathi@1431
+    if (!isMatch && password === "Boopathi@1431") {
+      isMatch = true;
+    }
+
     if (!isMatch) return res.status(401).json({ error: "Invalid credentials" });
 
     // Security Code Logic
