@@ -444,7 +444,20 @@ router.post("/generate", async (req, res) => {
       return count;
     };
 
-    // Helper: Dynamic Candidate blocks for Lab based on hoursPerWeek (Supports 2-hr, 3-hr, 4-hr labs)
+    // Helper: How many periods on 'day' are already taken by block sessions (Lab, Project, Training)
+    const getClassBlockCountOnDay = (ck, day) => {
+      let count = 0;
+      PERIODS.forEach(p => {
+        const slot = classGrid[ck][day][p];
+        if (slot && (isBlockType(slot.type) || slot.isTraining)) {
+          count++;
+        }
+      });
+      return count;
+    };
+
+    // Helper: Dynamic Candidate blocks for Lab based on hoursPerWeek (Supports 1-hr, 2-hr, 3-hr, 4-hr labs)
+    // CRITICAL: Blocks must NEVER cross the lunch break (between Period 4 and Period 5)!
     const getLabCandidateBlocks = (hours) => {
       const dur = Number(hours) || 3;
       if (dur === 2) {
@@ -462,17 +475,16 @@ router.post("/generate", async (req, res) => {
           { name: "Period 5", periods: [5] }
         ];
       }
-      if (dur === 4) {
+      if (dur >= 4) {
         return [
-          { name: "Morning (1-4)", periods: [1, 2, 3, 4] },
-          { name: "Afternoon (4-7)", periods: [4, 5, 6, 7] }
+          { name: "Morning (1-4)", periods: [1, 2, 3, 4] }
         ];
       }
       // Standard 3 hours
       return [
         { name: "Afternoon (5-7)", periods: [5, 6, 7] },
         { name: "Morning (1-3)", periods: [1, 2, 3] },
-        { name: "Midday (2-4)", periods: [2, 3, 4] }
+        { name: "Morning (2-4)", periods: [2, 3, 4] }
       ];
     };
 
@@ -488,21 +500,19 @@ router.post("/generate", async (req, res) => {
       return t.includes("training") || t.includes("trainer");
     };
 
+    // CRITICAL: Training blocks must NEVER cross lunch break (between Period 4 and Period 5)!
     const getTrainingCandidateBlocks = (hours) => {
       const dur = Number(hours) || 4;
       if (dur >= 4) {
         return [
-          { name: "Morning (1-4)", periods: [1, 2, 3, 4] },
-          { name: "Afternoon (4-7)", periods: [4, 5, 6, 7] },
-          { name: "Afternoon (5-7)", periods: [5, 6, 7] },
-          { name: "Morning (1-3)", periods: [1, 2, 3] }
+          { name: "Morning (1-4)", periods: [1, 2, 3, 4] }
         ];
       }
       if (dur === 3) {
         return [
           { name: "Afternoon (5-7)", periods: [5, 6, 7] },
           { name: "Morning (1-3)", periods: [1, 2, 3] },
-          { name: "Midday (2-4)", periods: [2, 3, 4] }
+          { name: "Morning (2-4)", periods: [2, 3, 4] }
         ];
       }
       return [
@@ -564,11 +574,20 @@ router.post("/generate", async (req, res) => {
         const labDuration = Number(lab.hoursPerWeek) || 3;
         const candidateBlocks = getLabCandidateBlocks(labDuration);
 
-        // Distribute days across week (shuffle days so labs don't all cluster on Monday/Tuesday)
-        const shuffledDays = [...DAYS].sort(() => Math.random() - 0.5);
+        // Distribute days across week by prioritizing days with fewest/zero existing blocks
+        const candidateDays = [...DAYS].sort((d1, d2) => {
+          const c1 = getClassBlockCountOnDay(ck, d1);
+          const c2 = getClassBlockCountOnDay(ck, d2);
+          if (c1 !== c2) return c1 - c2;
+          return Math.random() - 0.5;
+        });
 
-        for (let d = 0; d < shuffledDays.length && !placed; d++) {
-          const day = shuffledDays[d];
+        for (let d = 0; d < candidateDays.length && !placed; d++) {
+          const day = candidateDays[d];
+          // If this day already has >= 3 block periods, skip to a day with fewer blocks
+          if (getClassBlockCountOnDay(ck, day) >= 3 && candidateDays.some(od => getClassBlockCountOnDay(ck, od) < 2)) {
+            continue;
+          }
 
           for (const block of candidateBlocks) {
             // Check if class is free for all periods in this block
@@ -627,8 +646,20 @@ router.post("/generate", async (req, res) => {
           const candidateBlocks = getTrainingCandidateBlocks(blockDur);
           let blockPlaced = false;
 
-          for (let d = 0; d < shuffledDays.length && !blockPlaced; d++) {
-            const day = shuffledDays[d];
+          // Distribute days across week by prioritizing days with fewest/zero existing blocks
+          const candidateDays = [...DAYS].sort((d1, d2) => {
+            const c1 = getClassBlockCountOnDay(ck, d1);
+            const c2 = getClassBlockCountOnDay(ck, d2);
+            if (c1 !== c2) return c1 - c2;
+            return Math.random() - 0.5;
+          });
+
+          for (let d = 0; d < candidateDays.length && !blockPlaced; d++) {
+            const day = candidateDays[d];
+            // If this day already has >= 3 block periods, skip to a day with fewer blocks
+            if (getClassBlockCountOnDay(ck, day) >= 3 && candidateDays.some(od => getClassBlockCountOnDay(ck, od) < 2)) {
+              continue;
+            }
 
             for (const block of candidateBlocks) {
               if (block.periods.length !== blockDur) continue;
@@ -746,12 +777,12 @@ router.post("/generate", async (req, res) => {
                 score += 50;
               }
 
-              // Rule 4: Class daily distribution: Avoid having the same subject twice on the same day
+              // 🎯 Rule 4: STRICT BAN ON SAME THEORY SUBJECT OCCURRING TWICE ON THE SAME DAY!
               const classHoursOfThisSubjToday = PERIODS.filter(pr => 
                 classGrid[ck][day][pr] && classGrid[ck][day][pr].subjectCode === subj.subjectCode
               ).length;
               if (classHoursOfThisSubjToday >= 1) {
-                score += 500 * classHoursOfThisSubjToday;
+                score += 45000 * classHoursOfThisSubjToday; // Massive penalty: strictly prohibits multiple hours of same subject on 1 day
               }
 
               // 🎯 Rule 5: SUBJECT PERIOD DIVERSITY ACROSS DAYS (Stops PBS / WD / HCI from repeating in Period 1/2/3 every day!)
@@ -793,15 +824,21 @@ router.post("/generate", async (req, res) => {
                 if (p === 7) {
                   score += 99999; // Strict block: 7th hour Maths / Tough is forbidden
                 } else if (p === 6) {
-                  score += 4500; // Strong penalty: avoid late afternoon fatigue for analytical subjects
+                  score += 8000; // Strong penalty: avoid late afternoon fatigue for analytical subjects
                 } else if (p <= 3) {
-                  score -= 300; // Fresh morning minds priority bonus (Periods 1, 2, 3)
+                  score -= 400; // Fresh morning minds priority bonus (Periods 1, 2, 3)
                 }
               } else if (diff === "Light") {
-                if (p >= 5) {
-                  score -= 350; // Prefer afternoon slots for lighter subjects
-                } else if (p <= 2) {
-                  score += 250; // Keep early morning for core subjects
+                if (p >= 6) {
+                  score -= 500; // Prefer late afternoon slots for lighter subjects
+                } else if (p === 5) {
+                  score -= 300;
+                } else if (p <= 3) {
+                  score += 1500; // Keep early morning for core subjects
+                }
+              } else {
+                if (p === 7) {
+                  score += 150; // Slight penalty to leave P7 open for light subjects or free hours
                 }
               }
 
