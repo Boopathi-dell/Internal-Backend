@@ -352,6 +352,83 @@ router.post("/generate", async (req, res) => {
       return left || right;
     };
 
+    // Helper: How many days in the week facultyName teaches during period 'p' (across all classes)
+    const getFacultyPeriodCount = (facultyName, p) => {
+      if (!facultyName || !facultyBusy[facultyName]) return 0;
+      let count = 0;
+      DAYS.forEach(d => {
+        if (facultyBusy[facultyName][d] && facultyBusy[facultyName][d][p]) {
+          count++;
+        }
+      });
+      return count;
+    };
+
+    // Helper: How many days in the week this class has this subjectCode during period 'p'
+    const getSubjectPeriodCount = (ck, subjectCode, p) => {
+      let count = 0;
+      DAYS.forEach(d => {
+        const slot = classGrid[ck][d][p];
+        if (slot && slot.subjectCode === subjectCode) {
+          count++;
+        }
+      });
+      return count;
+    };
+
+    // Helper: Morning vs Afternoon distribution for a subject in this class
+    const getSubjectMorningCount = (ck, subjectCode) => {
+      let count = 0;
+      DAYS.forEach(d => {
+        [1, 2, 3, 4].forEach(p => {
+          if (classGrid[ck][d][p] && classGrid[ck][d][p].subjectCode === subjectCode) count++;
+        });
+      });
+      return count;
+    };
+
+    const getSubjectAfternoonCount = (ck, subjectCode) => {
+      let count = 0;
+      DAYS.forEach(d => {
+        [5, 6, 7].forEach(p => {
+          if (classGrid[ck][d][p] && classGrid[ck][d][p].subjectCode === subjectCode) count++;
+        });
+      });
+      return count;
+    };
+
+    // Helper: Dynamic Candidate blocks for Lab based on hoursPerWeek (Supports 2-hr, 3-hr, 4-hr labs)
+    const getLabCandidateBlocks = (hours) => {
+      const dur = Number(hours) || 3;
+      if (dur === 2) {
+        return [
+          { name: "Afternoon (5-6)", periods: [5, 6] },
+          { name: "Afternoon (6-7)", periods: [6, 7] },
+          { name: "Morning (3-4)", periods: [3, 4] },
+          { name: "Morning (1-2)", periods: [1, 2] }
+        ];
+      }
+      if (dur === 1) {
+        return [
+          { name: "Period 7", periods: [7] },
+          { name: "Period 6", periods: [6] },
+          { name: "Period 5", periods: [5] }
+        ];
+      }
+      if (dur === 4) {
+        return [
+          { name: "Morning (1-4)", periods: [1, 2, 3, 4] },
+          { name: "Afternoon (4-7)", periods: [4, 5, 6, 7] }
+        ];
+      }
+      // Standard 3 hours
+      return [
+        { name: "Afternoon (5-7)", periods: [5, 6, 7] },
+        { name: "Morning (1-3)", periods: [1, 2, 3] },
+        { name: "Midday (2-4)", periods: [2, 3, 4] }
+      ];
+    };
+
     const isBlockType = (type) => {
       const t = (type || "").toLowerCase();
       return t.includes("lab") || t.includes("project");
@@ -397,36 +474,34 @@ router.post("/generate", async (req, res) => {
       // Monday Period 1 remains open to be naturally filled by regular subjects.
     });
 
-    // --- STEP A: PLACE LAB & PROJECT SESSIONS FIRST (Contiguous 3-slot blocks) ---
-    // Standard Lab candidate blocks: Periods [1, 2, 3] (morning) or [5, 6, 7] (afternoon)
-    const labBlocks = [
-      { name: "Morning", periods: [1, 2, 3] },
-      { name: "Afternoon", periods: [5, 6, 7] }
-    ];
-
+    // --- STEP A: PLACE LAB & PROJECT SESSIONS FIRST (Respects allocated hours: 2 hrs / 3 hrs) ---
     classKeys.forEach(ck => {
       const classLabs = classGroups[ck].allocations.filter(a => isBlockType(a.type));
       
       classLabs.forEach(lab => {
         let placed = false;
         const facs = lab.facultyNames || [];
+        const labDuration = Number(lab.hoursPerWeek) || 3;
+        const candidateBlocks = getLabCandidateBlocks(labDuration);
 
-        // Shuffle days or pick distinct days to spread across week
-        for (let d = 0; d < DAYS.length && !placed; d++) {
-          const day = DAYS[d];
+        // Distribute days across week (shuffle days so labs don't all cluster on Monday/Tuesday)
+        const shuffledDays = [...DAYS].sort(() => Math.random() - 0.5);
 
-          for (const block of labBlocks) {
-            // Check if class is free for all 3 periods (Note: Monday [1, 2, 3] is blocked if Class Advisor is at Period 1)
+        for (let d = 0; d < shuffledDays.length && !placed; d++) {
+          const day = shuffledDays[d];
+
+          for (const block of candidateBlocks) {
+            // Check if class is free for all periods in this block
             const classFree = block.periods.every(p => classGrid[ck][day][p] === null);
             if (!classFree) continue;
 
-            // Check if ALL assigned faculties are free for all 3 periods (CRITICAL ZERO CLASH!)
+            // Check if ALL assigned faculties are free for all periods (CRITICAL ZERO CLASH!)
             const allFacsFree = facs.every(f => 
               block.periods.every(p => isFacultyFree(f, day, p))
             );
             if (!allFacsFree) continue;
 
-            // All free! Place Lab / Project
+            // All free! Place Lab / Project with exact allocated duration
             block.periods.forEach(p => {
               classGrid[ck][day][p] = {
                 period: p,
@@ -454,19 +529,28 @@ router.post("/generate", async (req, res) => {
     });
 
     // --- STEP B: PLACE THEORY, SEMINAR, LIBRARY, & CUSTOM SUBJECTS ---
-    // Avoid staff fatigue, avoid consecutive same-subjects for class, balance workload across week
+    // Uses Round-Robin Interleaving + Period Diversity Penalty + Faculty 1st Hour Protection
     classKeys.forEach(ck => {
       const classTheory = classGroups[ck].allocations.filter(a => !isBlockType(a.type));
       
-      // Sort subjects: higher hours or single faculty first
-      classTheory.sort((a, b) => (b.hoursPerWeek || 4) - (a.hoursPerWeek || 4));
-
+      // Initialize hours tracking for round-robin
       classTheory.forEach(subj => {
-        const requiredHours = subj.hoursPerWeek || 4;
-        const fac = (subj.facultyNames && subj.facultyNames.length > 0) ? subj.facultyNames[0] : "";
-        let hoursAssigned = subj.advisorHourPlaced ? 1 : 0;
+        subj.requiredHours = Number(subj.hoursPerWeek) || 4;
+        subj.hoursAssigned = subj.advisorHourPlaced ? 1 : 0;
+      });
 
-        while (hoursAssigned < requiredHours) {
+      // Round-robin distribution: Assign 1 hour per subject per round
+      let assignedInRound = true;
+      while (assignedInRound) {
+        assignedInRound = false;
+
+        // Shuffle subject order each round so no single subject dominates the best slots
+        const roundSubjs = [...classTheory].sort(() => Math.random() - 0.5);
+
+        for (const subj of roundSubjs) {
+          if (subj.hoursAssigned >= subj.requiredHours) continue;
+
+          const fac = (subj.facultyNames && subj.facultyNames.length > 0) ? subj.facultyNames[0] : "";
           const candidateSlots = [];
 
           DAYS.forEach(day => {
@@ -485,69 +569,106 @@ router.post("/generate", async (req, res) => {
               // Calculate penalty score (lower score is better)
               let score = 0;
 
-              // Rule A: Avoid 3 or more continuous periods for faculty (CRITICAL USER REQUEST!)
+              // Rule 1: Avoid 3 or more continuous periods for faculty (Faculty fatigue protection)
               if (fac && causesFacultyContinuousFatigue(fac, day, p)) {
-                score += 5000;
+                score += 6000;
               }
 
-              // Rule B: Balance daily faculty load (avoid piling 4-5 hours onto 1 day)
+              // Rule 2: Balance daily faculty load (avoid piling 4-5 hours onto 1 day)
               if (fac) {
                 const dailyHours = getFacultyDailyHours(fac, day);
                 if (dailyHours >= 4) {
-                  score += 2500;
+                  score += 3000;
                 } else if (dailyHours >= 3) {
-                  score += 800;
+                  score += 1000;
                 } else {
-                  score += dailyHours * 60;
+                  score += dailyHours * 80;
                 }
               }
 
-              // Rule C: Prefer isolated periods with rest/prep breaks for faculty
+              // Rule 3: Prefer isolated periods with rest/prep breaks for faculty
               if (fac && hasAdjacentFacultyHour(fac, day, p)) {
-                score += 40;
+                score += 50;
               }
 
-              // Rule D: Class distribution: Avoid having the same subject twice on the same day if possible
-              const classHoursOfThisSubjToday = PERIODS.filter(pr => classGrid[ck][day][pr] && classGrid[ck][day][pr].subjectCode === subj.subjectCode).length;
+              // Rule 4: Class daily distribution: Avoid having the same subject twice on the same day
+              const classHoursOfThisSubjToday = PERIODS.filter(pr => 
+                classGrid[ck][day][pr] && classGrid[ck][day][pr].subjectCode === subj.subjectCode
+              ).length;
               if (classHoursOfThisSubjToday >= 1) {
-                score += 350;
+                score += 500 * classHoursOfThisSubjToday;
               }
+
+              // 🎯 Rule 5: SUBJECT PERIOD DIVERSITY ACROSS DAYS (Stops PBS / WD / HCI from repeating in Period 1/2/3 every day!)
+              const subjSamePeriod = getSubjectPeriodCount(ck, subj.subjectCode, p);
+              if (subjSamePeriod >= 1) {
+                score += subjSamePeriod * 3500;
+              }
+
+              // 🎯 Rule 6: FACULTY DAILY 1ST HOUR PROTECTION & PERIOD DIVERSITY
+              if (fac) {
+                const facPeriod1Count = getFacultyPeriodCount(fac, 1);
+                if (p === 1 && facPeriod1Count >= 1) {
+                  score += facPeriod1Count * 3000; // Strong penalty: Prevents faculty from having 1st hour every day!
+                }
+
+                const facSamePeriodCount = getFacultyPeriodCount(fac, p);
+                if (facSamePeriodCount >= 1) {
+                  score += facSamePeriodCount * 1200; // Prevents faculty from having the exact same period across days
+                }
+              }
+
+              // 🎯 Rule 7: Morning vs Afternoon Balance for Subject
+              const morningCount = getSubjectMorningCount(ck, subj.subjectCode);
+              const afternoonCount = getSubjectAfternoonCount(ck, subj.subjectCode);
+              if (p <= 4 && morningCount >= 3) {
+                score += 400; // Encourage afternoon slot
+              }
+              if (p >= 5 && afternoonCount >= 2) {
+                score += 300; // Encourage morning slot
+              }
+
+              // 🎯 Rule 8: Tie-Breaker Jitter (Prevents deterministic vertical column stacking)
+              const jitter = Math.floor(Math.random() * 60);
+              score += jitter;
 
               candidateSlots.push({ day, period: p, score });
             });
           });
 
-          if (candidateSlots.length === 0) {
-            break;
+          if (candidateSlots.length > 0) {
+            // Sort candidate slots by lowest score
+            candidateSlots.sort((a, b) => a.score - b.score);
+            const bestSlot = candidateSlots[0];
+
+            const { day, period: p } = bestSlot;
+            classGrid[ck][day][p] = {
+              period: p,
+              time: timings[p] || DEFAULT_TIMINGS[p],
+              subjectCode: subj.subjectCode,
+              subjectName: subj.subjectName,
+              shortName: subj.shortName || subj.subjectCode,
+              facultyName: fac,
+              facultyNames: fac ? [fac] : [],
+              type: subj.type || "Theory",
+              room: subj.type === "Library" ? "Library" : (subj.type === "Seminar" ? "Seminar Hall" : "LH-1")
+            };
+            if (fac) markFacultyBusy(fac, day, p, ck);
+            subj.hoursAssigned++;
+            assignedInRound = true;
           }
-
-          // Sort candidate slots by lowest score
-          candidateSlots.sort((a, b) => a.score - b.score);
-          const bestSlot = candidateSlots[0];
-
-          const { day, period: p } = bestSlot;
-          classGrid[ck][day][p] = {
-            period: p,
-            time: timings[p] || DEFAULT_TIMINGS[p],
-            subjectCode: subj.subjectCode,
-            subjectName: subj.subjectName,
-            shortName: subj.shortName || subj.subjectCode,
-            facultyName: fac,
-            facultyNames: fac ? [fac] : [],
-            type: subj.type || "Theory",
-            room: subj.type === "Library" ? "Library" : (subj.type === "Seminar" ? "Seminar Hall" : "LH-1")
-          };
-          if (fac) markFacultyBusy(fac, day, p, ck);
-          hoursAssigned++;
         }
+      }
 
-        if (hoursAssigned < requiredHours) {
+      // Check for unplaced theory hours
+      classTheory.forEach(subj => {
+        if (subj.hoursAssigned < subj.requiredHours) {
           unplacedTheory.push({
             classKey: ck,
             subject: subj.subjectName,
-            faculty: fac,
-            assigned: hoursAssigned,
-            required: requiredHours
+            faculty: (subj.facultyNames && subj.facultyNames[0]) || "",
+            assigned: subj.hoursAssigned,
+            required: subj.requiredHours
           });
         }
       });
