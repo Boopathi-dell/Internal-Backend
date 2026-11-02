@@ -199,7 +199,15 @@ router.get("/allocation", async (req, res) => {
   try {
     const { department = "CSE", academicYear = "2026-2027", semesterType = "Odd" } = req.query;
     const allocation = await TimetableAllocation.findOne({ department, academicYear, semesterType });
-    res.json(allocation || { department, academicYear, semesterType, allocations: [] });
+    res.json(allocation || { 
+      department, 
+      academicYear, 
+      semesterType, 
+      allocations: [],
+      iqacNumber: "MEC/IQAC/2026 - 27/CSE/006",
+      hallNumbers: {},
+      coordinators: {}
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -214,12 +222,18 @@ router.post("/allocation", async (req, res) => {
       semesterType = "Odd", 
       allocations = [], 
       yearSections,
-      classAdvisors
+      classAdvisors,
+      iqacNumber,
+      hallNumbers,
+      coordinators
     } = req.body;
 
     const updateData = { department, academicYear, semesterType, allocations, updatedAt: new Date() };
     if (yearSections) updateData.yearSections = yearSections;
     if (classAdvisors) updateData.classAdvisors = classAdvisors;
+    if (iqacNumber !== undefined) updateData.iqacNumber = iqacNumber;
+    if (hallNumbers !== undefined) updateData.hallNumbers = hallNumbers;
+    if (coordinators !== undefined) updateData.coordinators = coordinators;
 
     const doc = await TimetableAllocation.findOneAndUpdate(
       { department, academicYear, semesterType },

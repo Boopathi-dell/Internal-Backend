@@ -21,6 +21,9 @@ const timetableAllocationSchema = new mongoose.Schema({
   allocations: { type: [singleAllocationSchema], default: [] },
   yearSections: { type: Object, default: { "II": ["A", "B"], "III": ["A", "B"], "IV": ["A", "B", "C"] } },
   classAdvisors: { type: Object, default: {} },
+  iqacNumber: { type: String, default: "MEC/IQAC/2026 - 27/CSE/006" },
+  hallNumbers: { type: Object, default: {} },
+  coordinators: { type: Object, default: {} },
   updatedAt: { type: Date, default: Date.now }
 });
 
