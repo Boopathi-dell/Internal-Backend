@@ -5,6 +5,7 @@ const User = require("../models/User");
 const SubjectMaster = require("../models/SubjectMaster");
 const TimetableAllocation = require("../models/TimetableAllocation");
 const TimetableSchedule = require("../models/TimetableSchedule");
+const TimetableHistory = require("../models/TimetableHistory");
 
 // Period timing defaults matching official MEC timetable
 const DEFAULT_TIMINGS = {
@@ -273,6 +274,31 @@ router.post("/generate", async (req, res) => {
 
     if (!allocations || allocations.length === 0) {
       return res.status(400).json({ error: "No subject-staff allocations provided to generate timetable." });
+    }
+
+    // Check if current timetable is LOCKED (Finalized)
+    const existingSchedule = await TimetableSchedule.findOne({ department, academicYear, semesterType });
+    if (existingSchedule && existingSchedule.isLocked) {
+      return res.status(400).json({ 
+        error: "Timetable is LOCKED (Finalized)! Please unlock it in the Admin Panel before generating a new schedule." 
+      });
+    }
+
+    // Auto-Archive existing schedule into TimetableHistory before overwriting!
+    if (existingSchedule && existingSchedule.classes && existingSchedule.classes.length > 0) {
+      const histCount = await TimetableHistory.countDocuments({ department, academicYear, semesterType });
+      const dtStr = new Date(existingSchedule.generatedAt || Date.now()).toLocaleDateString("en-IN", {
+        day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit"
+      });
+      await TimetableHistory.create({
+        department,
+        academicYear,
+        semesterType,
+        versionName: `Version ${histCount + 1} (${dtStr})`,
+        classes: existingSchedule.classes,
+        isLocked: existingSchedule.isLocked || false,
+        generatedAt: existingSchedule.generatedAt || new Date()
+      });
     }
 
     // 1. Group allocations by classKey e.g. "II-A", "III-A", "IV-A"
@@ -798,7 +824,7 @@ router.post("/generate", async (req, res) => {
     // 6. Save or update generated timetable in MongoDB
     await TimetableSchedule.findOneAndUpdate(
       { department, academicYear, semesterType },
-      { department, academicYear, semesterType, classes: finalClasses, generatedAt: new Date() },
+      { department, academicYear, semesterType, classes: finalClasses, isLocked: false, generatedAt: new Date() },
       { upsert: true, new: true }
     );
 
@@ -836,6 +862,11 @@ router.put("/schedule/cell", async (req, res) => {
     const { department = "CSE", academicYear = "2026-2027", semesterType = "Odd", classKey, day, period, updatedSlot } = req.body;
     const doc = await TimetableSchedule.findOne({ department, academicYear, semesterType });
     if (!doc) return res.status(404).json({ error: "Schedule not found" });
+
+    // Check if locked
+    if (doc.isLocked) {
+      return res.status(400).json({ error: "Timetable is LOCKED (Finalized)! Please unlock it before editing slots." });
+    }
 
     const cls = doc.classes.find(c => c.classKey === classKey);
     if (!cls || !cls.days[day]) return res.status(404).json({ error: "Class or Day not found" });
@@ -899,6 +930,113 @@ router.put("/schedule/cell", async (req, res) => {
       return res.json({ success: true, schedule: doc, facultySchedules, message: "Slot updated successfully!" });
     }
     res.status(400).json({ error: "Period slot not found" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// 5. LOCK & VERSION HISTORY ROUTES
+// ==========================================
+
+// LOCK or UNLOCK Timetable Schedule
+router.put("/lock", async (req, res) => {
+  try {
+    const { department = "CSE", academicYear = "2026-2027", semesterType = "Odd", isLocked, lockedBy } = req.body;
+    const doc = await TimetableSchedule.findOneAndUpdate(
+      { department, academicYear, semesterType },
+      { 
+        isLocked: Boolean(isLocked), 
+        lockedBy: lockedBy || "Admin", 
+        lockedAt: isLocked ? new Date() : null 
+      },
+      { new: true }
+    );
+    if (!doc) return res.status(404).json({ error: "Timetable schedule not found to lock." });
+    res.json({ success: true, isLocked: doc.isLocked, doc, message: doc.isLocked ? "Timetable Locked (Finalized) Successfully! 🔒" : "Timetable Unlocked! 🔓" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET all History Versions
+router.get("/history", async (req, res) => {
+  try {
+    const { department = "CSE", academicYear = "2026-2027", semesterType = "Odd" } = req.query;
+    const history = await TimetableHistory.find({ department, academicYear, semesterType }).sort({ generatedAt: -1 });
+    res.json(history);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// RESTORE a History Version to active TimetableSchedule
+router.post("/history/restore/:id", async (req, res) => {
+  try {
+    const histDoc = await TimetableHistory.findById(req.params.id);
+    if (!histDoc) return res.status(404).json({ error: "Version not found" });
+
+    // Check if currently active is locked
+    const currentActive = await TimetableSchedule.findOne({
+      department: histDoc.department,
+      academicYear: histDoc.academicYear,
+      semesterType: histDoc.semesterType
+    });
+
+    if (currentActive && currentActive.isLocked) {
+      return res.status(400).json({ error: "Cannot restore while current timetable is LOCKED! Please unlock first." });
+    }
+
+    // Auto-archive the current active one before restoring
+    if (currentActive && currentActive.classes && currentActive.classes.length > 0) {
+      const histCount = await TimetableHistory.countDocuments({
+        department: histDoc.department,
+        academicYear: histDoc.academicYear,
+        semesterType: histDoc.semesterType
+      });
+      const dtStr = new Date(currentActive.generatedAt || Date.now()).toLocaleDateString("en-IN", {
+        day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit"
+      });
+      await TimetableHistory.create({
+        department: histDoc.department,
+        academicYear: histDoc.academicYear,
+        semesterType: histDoc.semesterType,
+        versionName: `Version ${histCount + 1} (Pre-Restore ${dtStr})`,
+        classes: currentActive.classes,
+        isLocked: currentActive.isLocked || false,
+        generatedAt: currentActive.generatedAt || new Date()
+      });
+    }
+
+    // Restore classes from history into TimetableSchedule
+    const updatedSchedule = await TimetableSchedule.findOneAndUpdate(
+      { department: histDoc.department, academicYear: histDoc.academicYear, semesterType: histDoc.semesterType },
+      {
+        department: histDoc.department,
+        academicYear: histDoc.academicYear,
+        semesterType: histDoc.semesterType,
+        classes: histDoc.classes,
+        isLocked: false,
+        generatedAt: new Date()
+      },
+      { upsert: true, new: true }
+    );
+
+    res.json({ 
+      success: true, 
+      message: `Restored ${histDoc.versionName || "Historical Version"} Successfully!`, 
+      schedule: updatedSchedule 
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE a History Version
+router.delete("/history/:id", async (req, res) => {
+  try {
+    await TimetableHistory.findByIdAndDelete(req.params.id);
+    res.json({ success: true, message: "History version removed successfully." });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
