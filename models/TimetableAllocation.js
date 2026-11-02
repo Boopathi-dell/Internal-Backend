@@ -9,6 +9,7 @@ const singleAllocationSchema = new mongoose.Schema({
   subjectName: { type: String, required: true },
   shortName: { type: String, default: "" },
   type: { type: String, default: "Theory" },
+  difficulty: { type: String, enum: ["Tough", "Normal", "Light"], default: "Normal" },
   hoursPerWeek: { type: Number, default: 4 },
   facultyNames: { type: [String], default: [] },
   facultyIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "Staff" }]

@@ -511,6 +511,7 @@ router.post("/generate", async (req, res) => {
           facultyName: advisor,
           facultyNames: [advisor],
           type: advisorSubj.type || "Theory",
+          difficulty: advisorSubj.difficulty || "Normal",
           room: "LH-1",
           isClassAdvisorHour: false
         };
@@ -559,6 +560,7 @@ router.post("/generate", async (req, res) => {
                 facultyName: facs.join(", "),
                 facultyNames: facs,
                 type: lab.type || "Lab",
+                difficulty: lab.difficulty || "Normal",
                 room: `${lab.shortName || (lab.type || "LAB")}`
               };
               facs.forEach(f => markFacultyBusy(f, day, p, ck));
@@ -679,6 +681,24 @@ router.post("/generate", async (req, res) => {
               const jitter = Math.floor(Math.random() * 60);
               score += jitter;
 
+              // 🎯 Rule 9: COGNITIVE LOAD & DIFFICULTY (Maths/Tough strictly avoids Period 7; Light in Afternoon)
+              const diff = subj.difficulty || "Normal";
+              if (diff === "Tough") {
+                if (p === 7) {
+                  score += 99999; // Strict block: 7th hour Maths / Tough is forbidden
+                } else if (p === 6) {
+                  score += 4500; // Strong penalty: avoid late afternoon fatigue for analytical subjects
+                } else if (p <= 3) {
+                  score -= 300; // Fresh morning minds priority bonus (Periods 1, 2, 3)
+                }
+              } else if (diff === "Light") {
+                if (p >= 5) {
+                  score -= 350; // Prefer afternoon slots for lighter subjects
+                } else if (p <= 2) {
+                  score += 250; // Keep early morning for core subjects
+                }
+              }
+
               candidateSlots.push({ day, period: p, score });
             });
           });
@@ -689,6 +709,7 @@ router.post("/generate", async (req, res) => {
             const bestSlot = candidateSlots[0];
 
             const { day, period: p } = bestSlot;
+            const diff = subj.difficulty || "Normal";
             classGrid[ck][day][p] = {
               period: p,
               time: timings[p] || DEFAULT_TIMINGS[p],
@@ -698,6 +719,7 @@ router.post("/generate", async (req, res) => {
               facultyName: fac,
               facultyNames: fac ? [fac] : [],
               type: subj.type || "Theory",
+              difficulty: diff,
               room: subj.type === "Library" ? "Library" : (subj.type === "Seminar" ? "Seminar Hall" : "LH-1")
             };
             if (fac) markFacultyBusy(fac, day, p, ck);
@@ -735,6 +757,7 @@ router.post("/generate", async (req, res) => {
               facultyName: "-",
               facultyNames: [],
               type: "Free",
+              difficulty: "Light",
               room: "Library"
             };
           }

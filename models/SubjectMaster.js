@@ -5,6 +5,7 @@ const singleSubjectSchema = new mongoose.Schema({
   name: { type: String, required: true },
   shortName: { type: String, default: "" },
   type: { type: String, default: "Theory" },
+  difficulty: { type: String, enum: ["Tough", "Normal", "Light"], default: "Normal" },
   hoursPerWeek: { type: Number, default: 4 },
   credits: { type: Number, default: 3 }
 });

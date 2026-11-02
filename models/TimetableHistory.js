@@ -13,3 +13,4 @@ const timetableHistorySchema = new mongoose.Schema({
 timetableHistorySchema.index({ department: 1, academicYear: 1, semesterType: 1, generatedAt: -1 });
 
 module.exports = mongoose.model("TimetableHistory", timetableHistorySchema);
+
