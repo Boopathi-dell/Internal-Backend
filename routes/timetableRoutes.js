@@ -9,13 +9,15 @@ const TimetableHistory = require("../models/TimetableHistory");
 
 // Period timing defaults matching official MEC timetable
 const DEFAULT_TIMINGS = {
-  1: "9:10 - 10:05",
+  1: "09:10 - 10:05",
   2: "10:05 - 11:00",
   3: "11:15 - 12:10",
   4: "12:10 - 01:00",
   5: "01:45 - 02:40",
   6: "02:40 - 03:35",
-  7: "03:35 - 04:30"
+  7: "03:35 - 04:30",
+  teaBreak: "11:00 - 11:15",
+  lunchBreak: "01:00 - 01:45"
 };
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
@@ -199,16 +201,23 @@ router.delete("/subjects/:id", async (req, res) => {
 router.get("/allocation", async (req, res) => {
   try {
     const { department = "CSE", academicYear = "2026-2027", semesterType = "Odd" } = req.query;
-    const allocation = await TimetableAllocation.findOne({ department, academicYear, semesterType });
-    res.json(allocation || { 
-      department, 
-      academicYear, 
-      semesterType, 
-      allocations: [],
-      iqacNumber: "MEC/IQAC/2026 - 27/CSE/006",
-      hallNumbers: {},
-      coordinators: {}
-    });
+    let allocation = await TimetableAllocation.findOne({ department, academicYear, semesterType });
+    if (!allocation) {
+      allocation = { 
+        department, 
+        academicYear, 
+        semesterType, 
+        allocations: [],
+        iqacNumber: "MEC/IQAC/2026 - 27/CSE/006",
+        hallNumbers: {},
+        coordinators: {},
+        periodTimings: DEFAULT_TIMINGS
+      };
+    } else if (!allocation.periodTimings || Object.keys(allocation.periodTimings).length === 0) {
+      allocation = allocation.toObject();
+      allocation.periodTimings = DEFAULT_TIMINGS;
+    }
+    res.json(allocation);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -226,7 +235,8 @@ router.post("/allocation", async (req, res) => {
       classAdvisors,
       iqacNumber,
       hallNumbers,
-      coordinators
+      coordinators,
+      periodTimings
     } = req.body;
 
     const updateData = { department, academicYear, semesterType, allocations, updatedAt: new Date() };
@@ -235,6 +245,7 @@ router.post("/allocation", async (req, res) => {
     if (iqacNumber !== undefined) updateData.iqacNumber = iqacNumber;
     if (hallNumbers !== undefined) updateData.hallNumbers = hallNumbers;
     if (coordinators !== undefined) updateData.coordinators = coordinators;
+    if (periodTimings !== undefined) updateData.periodTimings = periodTimings;
 
     const doc = await TimetableAllocation.findOneAndUpdate(
       { department, academicYear, semesterType },
@@ -259,16 +270,26 @@ router.post("/generate", async (req, res) => {
       semesterType = "Odd",
       allocations = [],
       classAdvisors: inputClassAdvisors,
-      timings = DEFAULT_TIMINGS
+      timings: inputTimings
     } = req.body;
 
     let classAdvisors = inputClassAdvisors;
+    let timings = inputTimings;
+
+    const savedAlloc = await TimetableAllocation.findOne({ department, academicYear, semesterType });
     if (!classAdvisors || Object.keys(classAdvisors).length === 0) {
-      const savedAlloc = await TimetableAllocation.findOne({ department, academicYear, semesterType });
       if (savedAlloc && savedAlloc.classAdvisors) {
         classAdvisors = savedAlloc.classAdvisors;
       } else {
         classAdvisors = {};
+      }
+    }
+
+    if (!timings || Object.keys(timings).length === 0) {
+      if (savedAlloc && savedAlloc.periodTimings && Object.keys(savedAlloc.periodTimings).length > 0) {
+        timings = savedAlloc.periodTimings;
+      } else {
+        timings = DEFAULT_TIMINGS;
       }
     }
 
@@ -824,7 +845,7 @@ router.post("/generate", async (req, res) => {
     // 6. Save or update generated timetable in MongoDB
     await TimetableSchedule.findOneAndUpdate(
       { department, academicYear, semesterType },
-      { department, academicYear, semesterType, classes: finalClasses, isLocked: false, generatedAt: new Date() },
+      { department, academicYear, semesterType, classes: finalClasses, periodTimings: timings, isLocked: false, generatedAt: new Date() },
       { upsert: true, new: true }
     );
 
@@ -1037,6 +1058,64 @@ router.delete("/history/:id", async (req, res) => {
   try {
     await TimetableHistory.findByIdAndDelete(req.params.id);
     res.json({ success: true, message: "History version removed successfully." });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// UPDATE & APPLY PERIOD TIMINGS ACROSS ALL TIMETABLES
+router.put("/timings", async (req, res) => {
+  try {
+    const { department = "CSE", academicYear = "2026-2027", semesterType = "Odd", timings } = req.body;
+    if (!timings || typeof timings !== "object") {
+      return res.status(400).json({ error: "Invalid period timings provided" });
+    }
+
+    // 1. Save in TimetableAllocation
+    const alloc = await TimetableAllocation.findOneAndUpdate(
+      { department, academicYear, semesterType },
+      { periodTimings: timings, updatedAt: new Date() },
+      { upsert: true, new: true }
+    );
+
+    // 2. Also update current active TimetableSchedule slots so all classes immediately reflect the new timings!
+    const schedule = await TimetableSchedule.findOne({ department, academicYear, semesterType });
+    if (schedule && schedule.classes) {
+      schedule.classes.forEach(cItem => {
+        DAYS.forEach(d => {
+          (cItem.days[d] || []).forEach(slot => {
+            if (timings[slot.period]) {
+              slot.time = timings[slot.period];
+            }
+          });
+        });
+      });
+      schedule.periodTimings = timings;
+      schedule.markModified("classes");
+      schedule.markModified("periodTimings");
+      await schedule.save();
+    }
+
+    res.json({ 
+      success: true, 
+      message: "Admin period timings saved and applied across all classes and schedules!", 
+      timings,
+      schedule 
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET Period Timings
+router.get("/timings", async (req, res) => {
+  try {
+    const { department = "CSE", academicYear = "2026-2027", semesterType = "Odd" } = req.query;
+    const alloc = await TimetableAllocation.findOne({ department, academicYear, semesterType });
+    const timings = (alloc && alloc.periodTimings && Object.keys(alloc.periodTimings).length > 0)
+      ? alloc.periodTimings
+      : DEFAULT_TIMINGS;
+    res.json(timings);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

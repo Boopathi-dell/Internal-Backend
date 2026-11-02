@@ -31,6 +31,7 @@ const timetableScheduleSchema = new mongoose.Schema({
   academicYear: { type: String, default: "2026-2027" },
   semesterType: { type: String, enum: ["Odd", "Even"], default: "Odd" },
   classes: { type: [classScheduleSchema], default: [] },
+  periodTimings: { type: Object, default: {} },
   isLocked: { type: Boolean, default: false },
   lockedBy: { type: String, default: "" },
   lockedAt: { type: Date },
