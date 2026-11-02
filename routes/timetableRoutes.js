@@ -6,15 +6,15 @@ const SubjectMaster = require("../models/SubjectMaster");
 const TimetableAllocation = require("../models/TimetableAllocation");
 const TimetableSchedule = require("../models/TimetableSchedule");
 
-// Period timing defaults
+// Period timing defaults matching official MEC timetable
 const DEFAULT_TIMINGS = {
-  1: "09:00 - 09:50",
-  2: "09:50 - 10:40",
-  3: "11:00 - 11:50",
-  4: "11:50 - 12:40",
-  5: "01:30 - 02:20",
-  6: "02:20 - 03:10",
-  7: "03:10 - 04:00"
+  1: "9:10 - 10:05",
+  2: "10:05 - 11:00",
+  3: "11:15 - 12:10",
+  4: "12:10 - 01:00",
+  5: "01:45 - 02:40",
+  6: "02:40 - 03:35",
+  7: "03:35 - 04:30"
 };
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
