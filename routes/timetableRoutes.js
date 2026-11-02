@@ -360,14 +360,16 @@ router.post("/generate", async (req, res) => {
     const unplacedLabs = [];
     const unplacedTheory = [];
 
-    // --- STEP 0: CLASS ADVISOR MONDAY PERIOD 1 RESERVATION ---
-    // User Requirement: Class Advisor goes to Monday Period 1 for their designated class!
+    // --- STEP 0: CLASS ADVISOR SUBJECT ON MONDAY PERIOD 1 ---
+    // User Requirement:
+    // Monday first hour is NOT a dummy advisor hour.
+    // If the advisor teaches any subject in this class, schedule that real subject on Monday Period 1.
+    // If the advisor does NOT teach any subject in this class, do not insert any dummy hour!
     classKeys.forEach(ck => {
       const advisor = classAdvisors && classAdvisors[ck];
       if (!advisor) return;
 
       if (!isFacultyFree(advisor, "Monday", 1)) {
-        console.warn(`Class Advisor ${advisor} for ${ck} is already busy on Monday Period 1!`);
         return;
       }
 
@@ -386,25 +388,13 @@ router.post("/generate", async (req, res) => {
           facultyNames: [advisor],
           type: advisorSubj.type || "Theory",
           room: "LH-1",
-          isClassAdvisorHour: true
+          isClassAdvisorHour: false
         };
         markFacultyBusy(advisor, "Monday", 1, ck);
         advisorSubj.advisorHourPlaced = true;
-      } else {
-        classGrid[ck]["Monday"][1] = {
-          period: 1,
-          time: timings[1] || DEFAULT_TIMINGS[1],
-          subjectCode: "ADV",
-          subjectName: "Class Advisor & Mentoring Hour",
-          shortName: "ADVISOR",
-          facultyName: advisor,
-          facultyNames: [advisor],
-          type: "Mentoring",
-          room: "Classroom",
-          isClassAdvisorHour: true
-        };
-        markFacultyBusy(advisor, "Monday", 1, ck);
       }
+      // If advisor does not teach any subject in this class, do NOT place dummy ADVISOR slot.
+      // Monday Period 1 remains open to be naturally filled by regular subjects.
     });
 
     // --- STEP A: PLACE LAB & PROJECT SESSIONS FIRST (Contiguous 3-slot blocks) ---
