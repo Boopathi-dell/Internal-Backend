@@ -481,6 +481,38 @@ router.post("/generate", async (req, res) => {
       return t.includes("lab") || t.includes("project");
     };
 
+    const isTrainingSubject = (item) => {
+      if (!item) return false;
+      if (item.isTraining === true) return true;
+      const t = (item.type || "").toLowerCase();
+      return t.includes("training") || t.includes("trainer");
+    };
+
+    const getTrainingCandidateBlocks = (hours) => {
+      const dur = Number(hours) || 4;
+      if (dur >= 4) {
+        return [
+          { name: "Morning (1-4)", periods: [1, 2, 3, 4] },
+          { name: "Afternoon (4-7)", periods: [4, 5, 6, 7] },
+          { name: "Afternoon (5-7)", periods: [5, 6, 7] },
+          { name: "Morning (1-3)", periods: [1, 2, 3] }
+        ];
+      }
+      if (dur === 3) {
+        return [
+          { name: "Afternoon (5-7)", periods: [5, 6, 7] },
+          { name: "Morning (1-3)", periods: [1, 2, 3] },
+          { name: "Midday (2-4)", periods: [2, 3, 4] }
+        ];
+      }
+      return [
+        { name: "Afternoon (5-6)", periods: [5, 6] },
+        { name: "Afternoon (6-7)", periods: [6, 7] },
+        { name: "Morning (1-2)", periods: [1, 2] },
+        { name: "Morning (3-4)", periods: [3, 4] }
+      ];
+    };
+
     const unplacedLabs = [];
     const unplacedTheory = [];
 
@@ -577,10 +609,84 @@ router.post("/generate", async (req, res) => {
       });
     });
 
+    // --- STEP A.2: PLACE EXTERNAL TRAINING / CONTINUOUS BLOCK SESSIONS ---
+    // User Requirement:
+    // DAA / Training subjects taken by outside trainers must come in continuous blocks
+    // (e.g. 4 hours Morning P1-P4 or 3 hours Afternoon P5-P7).
+    // Section A and Section B swap morning and afternoon across days so trainer never clashes!
+    classKeys.forEach(ck => {
+      const classTraining = classGroups[ck].allocations.filter(a => isTrainingSubject(a) && !isBlockType(a.type));
+      
+      classTraining.forEach(tr => {
+        let remainingHours = Number(tr.hoursPerWeek) || 4;
+        const facs = tr.facultyNames || [];
+        const shuffledDays = [...DAYS].sort(() => Math.random() - 0.5);
+
+        while (remainingHours > 0) {
+          const blockDur = remainingHours >= 4 ? 4 : (remainingHours >= 3 ? 3 : remainingHours);
+          const candidateBlocks = getTrainingCandidateBlocks(blockDur);
+          let blockPlaced = false;
+
+          for (let d = 0; d < shuffledDays.length && !blockPlaced; d++) {
+            const day = shuffledDays[d];
+
+            for (const block of candidateBlocks) {
+              if (block.periods.length !== blockDur) continue;
+
+              const classFree = block.periods.every(p => classGrid[ck][day][p] === null);
+              if (!classFree) continue;
+
+              const allFacsFree = facs.every(f => 
+                block.periods.every(p => isFacultyFree(f, day, p))
+              );
+              if (!allFacsFree) continue;
+
+              // Place Continuous Training Block
+              block.periods.forEach(p => {
+                classGrid[ck][day][p] = {
+                  period: p,
+                  time: timings[p] || DEFAULT_TIMINGS[p],
+                  subjectCode: tr.subjectCode,
+                  subjectName: tr.subjectName,
+                  shortName: tr.shortName || tr.subjectCode,
+                  facultyName: facs.join(", "),
+                  facultyNames: facs,
+                  type: tr.type || "Training",
+                  difficulty: tr.difficulty || "Normal",
+                  isTraining: true,
+                  room: "Training Hall / LH-1"
+                };
+                facs.forEach(f => markFacultyBusy(f, day, p, ck));
+              });
+
+              remainingHours -= blockDur;
+              blockPlaced = true;
+              break;
+            }
+          }
+
+          if (!blockPlaced) {
+            tr.leftoverHours = remainingHours;
+            break;
+          }
+        }
+      });
+    });
+
     // --- STEP B: PLACE THEORY, SEMINAR, LIBRARY, & CUSTOM SUBJECTS ---
     // Uses Round-Robin Interleaving + Period Diversity Penalty + Faculty 1st Hour Protection
     classKeys.forEach(ck => {
-      const classTheory = classGroups[ck].allocations.filter(a => !isBlockType(a.type));
+      const classTheory = classGroups[ck].allocations.filter(a => !isBlockType(a.type) && !isTrainingSubject(a));
+      
+      // Also add any training subjects that had leftover hours that couldn't fit a full block
+      const classTrainingWithLeftovers = classGroups[ck].allocations.filter(a => isTrainingSubject(a) && !isBlockType(a.type) && a.leftoverHours > 0);
+      classTrainingWithLeftovers.forEach(tr => {
+        classTheory.push({
+          ...tr,
+          requiredHours: tr.leftoverHours,
+          hoursAssigned: 0
+        });
+      });
       
       // Initialize hours tracking for round-robin
       classTheory.forEach(subj => {

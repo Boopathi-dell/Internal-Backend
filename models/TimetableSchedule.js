@@ -10,6 +10,7 @@ const periodSlotSchema = new mongoose.Schema({
   facultyNames: { type: [String], default: [] },
   type: { type: String, default: "Theory" },
   difficulty: { type: String, default: "Normal" },
+  isTraining: { type: Boolean, default: false },
   room: { type: String, default: "" }
 }, { _id: false });
 
