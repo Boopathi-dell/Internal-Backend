@@ -322,6 +322,36 @@ router.post("/generate", async (req, res) => {
       });
     }
 
+    // Sync with SubjectMaster so latest slotPattern (e.g. "2+2", "2+1") is ALWAYS honored directly from curriculum
+    try {
+      const subjectMasters = await SubjectMaster.find({ department: department || "CSE" });
+      const curriculumMap = {};
+      subjectMasters.forEach(sm => {
+        (sm.subjects || []).forEach(s => {
+          if (s.code) {
+            curriculumMap[`${sm.year}-${s.code.toUpperCase()}`] = s;
+            curriculumMap[s.code.toUpperCase()] = s;
+          }
+        });
+      });
+
+      allocations.forEach(a => {
+        const codeKey = a.subjectCode ? a.subjectCode.toUpperCase() : "";
+        const curr = curriculumMap[`${a.year}-${codeKey}`] || curriculumMap[codeKey];
+        if (curr) {
+          if (curr.slotPattern && curr.slotPattern !== "regular") {
+            a.slotPattern = curr.slotPattern;
+            a.isTraining = true;
+          }
+          if (curr.difficulty && !a.difficulty) {
+            a.difficulty = curr.difficulty;
+          }
+        }
+      });
+    } catch (e) {
+      console.log("Could not sync SubjectMaster during generation:", e);
+    }
+
     // 1. Group allocations by classKey e.g. "II-A", "III-A", "IV-A"
     const classGroups = {};
     allocations.forEach(item => {
@@ -506,16 +536,55 @@ router.post("/generate", async (req, res) => {
       const total = Number(hours) || 4;
       const cleanPat = (pat || "").trim().toLowerCase();
 
+      // Explicit single-number requests
+      if (cleanPat === "4" || cleanPat === "4h" || cleanPat === "half-day") {
+        return { blocks: [4], singles: Math.max(0, total - 4) };
+      }
+      if (cleanPat === "3" || cleanPat === "3h") {
+        return { blocks: [3], singles: Math.max(0, total - 3) };
+      }
+      if (cleanPat === "2" || cleanPat === "2h") {
+        return { blocks: [2], singles: Math.max(0, total - 2) };
+      }
+
+      // Explicit "2+2": Always two 2-hour blocks on separate alternate days
+      if (cleanPat === "2+2") {
+        return { blocks: [2, 2], singles: Math.max(0, total - 4) };
+      }
+
+      // Explicit "2+1": 2-hour continuous block on Day 1 + 1-hour single on Day 2
+      if (cleanPat === "2+1") {
+        return { blocks: [2], singles: Math.max(0, total - 2) };
+      }
+
+      // Explicit "2+1+1": 2-hour continuous block on Day 1 + two 1-hour singles
+      if (cleanPat === "2+1+1") {
+        return { blocks: [2], singles: Math.max(0, total - 2) };
+      }
+
+      // Explicit "3+1": 3-hour continuous block + 1-hour single
+      if (cleanPat === "3+1") {
+        return { blocks: [3], singles: Math.max(0, total - 3) };
+      }
+
+      // Explicit "4+3": Trainer morning/afternoon flip across sections
+      if (cleanPat === "4+3") {
+        return { blocks: [4, 3], singles: Math.max(0, total - 7) };
+      }
+
       // If regular or empty with no training flag
       if (cleanPat === "regular" || (!cleanPat && !isTr && !(type && type.toLowerCase().includes("training")))) {
         return { blocks: [], singles: total };
       }
 
-      // If trainer flag without pattern: default based on hours
+      // If trainer / continuous flag without explicit pattern:
+      // CRITICAL: 4 hours MUST default to [2, 2] on alternate days! NEVER [4] on a single day!
       if (!cleanPat && (isTr || (type && type.toLowerCase().includes("training")))) {
         if (total >= 7) return { blocks: [4, 3], singles: Math.max(0, total - 7) };
-        if (total >= 4) return { blocks: [4], singles: Math.max(0, total - 4) };
-        if (total === 3) return { blocks: [3], singles: 0 };
+        if (total === 6) return { blocks: [2, 2, 2], singles: 0 };
+        if (total === 5) return { blocks: [2, 2], singles: 1 };
+        if (total === 4) return { blocks: [2, 2], singles: 0 }; // 4 hours -> 2h + 2h alternate days!
+        if (total === 3) return { blocks: [2], singles: 1 };     // 3 hours -> 2h block + 1h single!
         if (total === 2) return { blocks: [2], singles: 0 };
         return { blocks: [], singles: total };
       }
@@ -524,6 +593,12 @@ router.post("/generate", async (req, res) => {
       const parts = cleanPat.split(/[\+,\s\-\/]+/).map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n) && n > 0);
 
       if (parts.length > 0) {
+        if (parts.length === 1) {
+          if (parts[0] === 4) return { blocks: [4], singles: Math.max(0, total - 4) };
+          if (parts[0] === 3) return { blocks: [3], singles: Math.max(0, total - 3) };
+          if (parts[0] === 2) return { blocks: [2], singles: Math.max(0, total - 2) };
+        }
+
         const blocks = [];
         let singles = 0;
         let patternSum = 0;
@@ -620,7 +695,15 @@ router.post("/generate", async (req, res) => {
 
     // --- STEP A: PLACE LAB & PROJECT SESSIONS FIRST (Respects allocated hours: 2 hrs / 3 hrs) ---
     classKeys.forEach(ck => {
-      const classLabs = classGroups[ck].allocations.filter(a => isBlockType(a.type));
+      const classLabs = classGroups[ck].allocations.filter(a => {
+        if (!isBlockType(a.type)) return false;
+        // If lab has a custom split pattern (e.g. "2+1" for CDS-III), do NOT place as single 3-hour block!
+        const pat = (a.slotPattern || "").trim().toLowerCase();
+        if (pat && pat !== "regular" && pat !== "3" && pat !== "3h" && pat !== "block") {
+          return false; // Skip monolithic lab placement; Step A.2 handles the split!
+        }
+        return true;
+      });
       
       classLabs.forEach(lab => {
         let placed = false;
@@ -682,32 +765,54 @@ router.post("/generate", async (req, res) => {
       });
     });
 
-    // --- STEP A.2: PLACE CONTINUOUS SESSIONS (Pattern e.g. 2+2, 2+1+1, 3+1, 4, Training) ---
+    // --- STEP A.2: PLACE CONTINUOUS SESSIONS (Pattern e.g. 2+2, 2+1, 2+1+1, 3+1, 4, Training) ---
     // User Requirement:
-    // Support Admin-chosen Continuous Hours pattern (e.g. DAA 4 hrs = 2h + 2h continuous blocks, or 2+1+1, or 4h block).
+    // Support Admin-chosen Continuous Hours pattern (e.g. DAA 4 hrs = 2h + 2h continuous blocks on ALTERNATE days, CDS 3 hrs = 2h + 1h).
     // Section A and Section B swap morning and afternoon across days so trainer never clashes!
     classKeys.forEach(ck => {
       const classContinuousSubjs = classGroups[ck].allocations.filter(a => {
-        if (isBlockType(a.type)) return false;
-        const parsed = parseSlotPattern(a.slotPattern, a.hoursPerWeek, a.isTraining, a.type);
-        return parsed.blocks && parsed.blocks.length > 0;
+        const pat = (a.slotPattern || "").trim().toLowerCase();
+        // If user explicitly gave a pattern (e.g. "2+1", "2+2", "3+1", etc.), handle it here regardless of type (including Labs like CDS)!
+        if (pat && pat !== "regular") {
+          const parsed = parseSlotPattern(a.slotPattern, a.hoursPerWeek, a.isTraining, a.type);
+          return parsed.blocks && parsed.blocks.length > 0;
+        }
+        // If marked as training, and not a standard monolithic lab:
+        if (a.isTraining || (a.type && a.type.toLowerCase().includes("training"))) {
+          if (isBlockType(a.type)) return false;
+          const parsed = parseSlotPattern(a.slotPattern, a.hoursPerWeek, a.isTraining, a.type);
+          return parsed.blocks && parsed.blocks.length > 0;
+        }
+        return false;
       });
 
       classContinuousSubjs.forEach(item => {
         const parsed = parseSlotPattern(item.slotPattern, item.hoursPerWeek, item.isTraining, item.type);
         const facs = item.facultyNames || [];
         item.placedBlocksHours = 0;
+        item.placedBlockDays = [];
 
         for (const blockDur of parsed.blocks) {
           const candidateBlocks = getCandidateBlocksForDuration(blockDur);
           let blockPlaced = false;
 
-          // Days prioritized by fewest existing blocks and NOT already containing this subject today
+          // Days prioritized by:
+          // 1. Not already containing this subject today (strict skip)
+          // 2. Alternate day spacing from previously placed blocks of this subject (e.g. Monday -> Wednesday / Thursday)
+          // 3. Fewest existing blocks on that day
           const candidateDays = [...DAYS].sort((d1, d2) => {
-            const hasSubj1 = classGrid[ck][d1] && PERIODS.some(p => classGrid[ck][d1][p]?.subjectCode === item.subjectCode) ? 10 : 0;
-            const hasSubj2 = classGrid[ck][d2] && PERIODS.some(p => classGrid[ck][d2][p]?.subjectCode === item.subjectCode) ? 10 : 0;
-            const c1 = getClassBlockCountOnDay(ck, d1) + hasSubj1;
-            const c2 = getClassBlockCountOnDay(ck, d2) + hasSubj2;
+            const hasSubj1 = classGrid[ck][d1] && PERIODS.some(p => classGrid[ck][d1][p]?.subjectCode === item.subjectCode) ? 100 : 0;
+            const hasSubj2 = classGrid[ck][d2] && PERIODS.some(p => classGrid[ck][d2][p]?.subjectCode === item.subjectCode) ? 100 : 0;
+            if (hasSubj1 !== hasSubj2) return hasSubj1 - hasSubj2;
+
+            // Alternate day preference: Prefer days with >= 2 days gap from already placed block of this subject
+            const placedDays = item.placedBlockDays || [];
+            const isAlt1 = placedDays.length === 0 || placedDays.some(pd => Math.abs(DAYS.indexOf(d1) - DAYS.indexOf(pd)) >= 2);
+            const isAlt2 = placedDays.length === 0 || placedDays.some(pd => Math.abs(DAYS.indexOf(d2) - DAYS.indexOf(pd)) >= 2);
+            if (isAlt1 !== isAlt2) return isAlt1 ? -1 : 1;
+
+            const c1 = getClassBlockCountOnDay(ck, d1);
+            const c2 = getClassBlockCountOnDay(ck, d2);
             if (c1 !== c2) return c1 - c2;
             return Math.random() - 0.5;
           });
@@ -757,6 +862,7 @@ router.post("/generate", async (req, res) => {
               });
 
               item.placedBlocksHours += blockDur;
+              item.placedBlockDays.push(day);
               blockPlaced = true;
               break;
             }
@@ -771,7 +877,11 @@ router.post("/generate", async (req, res) => {
       const classTheory = [];
 
       classGroups[ck].allocations.forEach(a => {
-        if (isBlockType(a.type)) return;
+        const pat = (a.slotPattern || "").trim().toLowerCase();
+        // If standard monolithic lab without custom pattern, skip
+        if (isBlockType(a.type) && (!pat || pat === "regular" || pat === "3" || pat === "3h" || pat === "block")) {
+          return;
+        }
 
         const placedHours = a.placedBlocksHours || 0;
         const totalNeeded = Number(a.hoursPerWeek) || 4;
@@ -838,12 +948,12 @@ router.post("/generate", async (req, res) => {
                 score += 50;
               }
 
-              // 🎯 Rule 4: STRICT BAN ON SAME THEORY SUBJECT OCCURRING TWICE ON THE SAME DAY!
+              // 🎯 Rule 4: HARD BAN ON SAME THEORY SUBJECT OCCURRING TWICE ON THE SAME DAY!
               const classHoursOfThisSubjToday = PERIODS.filter(pr => 
                 classGrid[ck][day][pr] && classGrid[ck][day][pr].subjectCode === subj.subjectCode
               ).length;
               if (classHoursOfThisSubjToday >= 1) {
-                score += 45000 * classHoursOfThisSubjToday; // Massive penalty: strictly prohibits multiple hours of same subject on 1 day
+                return; // Strictly reject: Never allow the same subject twice on the same day in Step B!
               }
 
               // 🎯 Rule 5: SUBJECT PERIOD DIVERSITY ACROSS DAYS (Stops PBS / WD / HCI from repeating in Period 1/2/3 every day!)
