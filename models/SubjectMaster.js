@@ -7,6 +7,7 @@ const singleSubjectSchema = new mongoose.Schema({
   type: { type: String, default: "Theory" },
   difficulty: { type: String, enum: ["Tough", "Normal", "Light"], default: "Normal" },
   isTraining: { type: Boolean, default: false },
+  slotPattern: { type: String, default: "regular" },
   hoursPerWeek: { type: Number, default: 4 },
   credits: { type: Number, default: 3 }
 });

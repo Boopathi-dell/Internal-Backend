@@ -500,9 +500,33 @@ router.post("/generate", async (req, res) => {
       return t.includes("training") || t.includes("trainer");
     };
 
-    // CRITICAL: Training blocks must NEVER cross lunch break (between Period 4 and Period 5)!
-    const getTrainingCandidateBlocks = (hours) => {
-      const dur = Number(hours) || 4;
+    // Helper: Parse slot pattern into continuous chunks & single hours (Supports "2+2", "2+1+1", "3+1", "4", "3", "2", "regular")
+    const parseSlotPattern = (pat, hours, isTr, type) => {
+      const total = Number(hours) || 4;
+      const cleanPat = (pat || "").trim().toLowerCase();
+
+      if (cleanPat === "2+2") return { blocks: [2, 2], singles: Math.max(0, total - 4) };
+      if (cleanPat === "2+1+1") return { blocks: [2], singles: Math.max(0, total - 2) };
+      if (cleanPat === "3+1") return { blocks: [3], singles: Math.max(0, total - 3) };
+      if (cleanPat === "4") return { blocks: [4], singles: Math.max(0, total - 4) };
+      if (cleanPat === "3") return { blocks: [3], singles: Math.max(0, total - 3) };
+      if (cleanPat === "2") return { blocks: [2], singles: Math.max(0, total - 2) };
+      if (cleanPat === "4+3") return { blocks: [4, 3], singles: Math.max(0, total - 7) };
+      if (cleanPat === "2+2+1") return { blocks: [2, 2], singles: Math.max(0, total - 4) };
+      if (cleanPat === "3+2") return { blocks: [3, 2], singles: Math.max(0, total - 5) };
+
+      if (isTr || (type && type.toLowerCase().includes("training"))) {
+        if (total >= 7) return { blocks: [4, 3], singles: total - 7 };
+        if (total >= 4) return { blocks: [4], singles: total - 4 };
+        if (total === 3) return { blocks: [3], singles: 0 };
+        if (total === 2) return { blocks: [2], singles: 0 };
+      }
+
+      return { blocks: [], singles: total };
+    };
+
+    // Candidate blocks for any continuous chunk duration (NEVER crosses lunch break)
+    const getCandidateBlocksForDuration = (dur) => {
       if (dur >= 4) {
         return [
           { name: "Morning (1-4)", periods: [1, 2, 3, 4] }
@@ -515,11 +539,18 @@ router.post("/generate", async (req, res) => {
           { name: "Morning (2-4)", periods: [2, 3, 4] }
         ];
       }
+      if (dur === 2) {
+        return [
+          { name: "Morning (1-2)", periods: [1, 2] },
+          { name: "Morning (3-4)", periods: [3, 4] },
+          { name: "Afternoon (5-6)", periods: [5, 6] },
+          { name: "Afternoon (6-7)", periods: [6, 7] }
+        ];
+      }
       return [
-        { name: "Afternoon (5-6)", periods: [5, 6] },
-        { name: "Afternoon (6-7)", periods: [6, 7] },
-        { name: "Morning (1-2)", periods: [1, 2] },
-        { name: "Morning (3-4)", periods: [3, 4] }
+        { name: "Period 7", periods: [7] },
+        { name: "Period 6", periods: [6] },
+        { name: "Period 5", periods: [5] }
       ];
     };
 
@@ -628,42 +659,54 @@ router.post("/generate", async (req, res) => {
       });
     });
 
-    // --- STEP A.2: PLACE EXTERNAL TRAINING / CONTINUOUS BLOCK SESSIONS ---
+    // --- STEP A.2: PLACE CONTINUOUS SESSIONS (Pattern e.g. 2+2, 2+1+1, 3+1, 4, Training) ---
     // User Requirement:
-    // DAA / Training subjects taken by outside trainers must come in continuous blocks
-    // (e.g. 4 hours Morning P1-P4 or 3 hours Afternoon P5-P7).
+    // Support Admin-chosen Continuous Hours pattern (e.g. DAA 4 hrs = 2h + 2h continuous blocks, or 2+1+1, or 4h block).
     // Section A and Section B swap morning and afternoon across days so trainer never clashes!
     classKeys.forEach(ck => {
-      const classTraining = classGroups[ck].allocations.filter(a => isTrainingSubject(a) && !isBlockType(a.type));
-      
-      classTraining.forEach(tr => {
-        let remainingHours = Number(tr.hoursPerWeek) || 4;
-        const facs = tr.facultyNames || [];
-        const shuffledDays = [...DAYS].sort(() => Math.random() - 0.5);
+      const classContinuousSubjs = classGroups[ck].allocations.filter(a => {
+        if (isBlockType(a.type)) return false;
+        const parsed = parseSlotPattern(a.slotPattern, a.hoursPerWeek, a.isTraining, a.type);
+        return parsed.blocks && parsed.blocks.length > 0;
+      });
 
-        while (remainingHours > 0) {
-          const blockDur = remainingHours >= 4 ? 4 : (remainingHours >= 3 ? 3 : remainingHours);
-          const candidateBlocks = getTrainingCandidateBlocks(blockDur);
+      classContinuousSubjs.forEach(item => {
+        const parsed = parseSlotPattern(item.slotPattern, item.hoursPerWeek, item.isTraining, item.type);
+        const facs = item.facultyNames || [];
+        item.placedBlocksHours = 0;
+
+        for (const blockDur of parsed.blocks) {
+          const candidateBlocks = getCandidateBlocksForDuration(blockDur);
           let blockPlaced = false;
 
-          // Distribute days across week by prioritizing days with fewest/zero existing blocks
+          // Days prioritized by fewest existing blocks and NOT already containing this subject today
           const candidateDays = [...DAYS].sort((d1, d2) => {
-            const c1 = getClassBlockCountOnDay(ck, d1);
-            const c2 = getClassBlockCountOnDay(ck, d2);
+            const hasSubj1 = classGrid[ck][d1] && PERIODS.some(p => classGrid[ck][d1][p]?.subjectCode === item.subjectCode) ? 10 : 0;
+            const hasSubj2 = classGrid[ck][d2] && PERIODS.some(p => classGrid[ck][d2][p]?.subjectCode === item.subjectCode) ? 10 : 0;
+            const c1 = getClassBlockCountOnDay(ck, d1) + hasSubj1;
+            const c2 = getClassBlockCountOnDay(ck, d2) + hasSubj2;
             if (c1 !== c2) return c1 - c2;
             return Math.random() - 0.5;
           });
 
           for (let d = 0; d < candidateDays.length && !blockPlaced; d++) {
             const day = candidateDays[d];
-            // If this day already has >= 3 block periods, skip to a day with fewer blocks
-            if (getClassBlockCountOnDay(ck, day) >= 3 && candidateDays.some(od => getClassBlockCountOnDay(ck, od) < 2)) {
-              continue;
-            }
 
-            for (const block of candidateBlocks) {
-              if (block.periods.length !== blockDur) continue;
+            // Don't place two blocks of the SAME subject on the SAME day!
+            const alreadyHasSubjToday = PERIODS.some(p => classGrid[ck][day][p]?.subjectCode === item.subjectCode);
+            if (alreadyHasSubjToday) continue;
 
+            // Sort candidate blocks: if Tough, avoid Period 7
+            const sortedBlocks = [...candidateBlocks].sort((b1, b2) => {
+              if (item.difficulty === "Tough") {
+                const b1P7 = b1.periods.includes(7) ? 100 : 0;
+                const b2P7 = b2.periods.includes(7) ? 100 : 0;
+                if (b1P7 !== b2P7) return b1P7 - b2P7;
+              }
+              return 0;
+            });
+
+            for (const block of sortedBlocks) {
               const classFree = block.periods.every(p => classGrid[ck][day][p] === null);
               if (!classFree) continue;
 
@@ -672,33 +715,28 @@ router.post("/generate", async (req, res) => {
               );
               if (!allFacsFree) continue;
 
-              // Place Continuous Training Block
+              // Place the continuous block!
               block.periods.forEach(p => {
                 classGrid[ck][day][p] = {
                   period: p,
                   time: timings[p] || DEFAULT_TIMINGS[p],
-                  subjectCode: tr.subjectCode,
-                  subjectName: tr.subjectName,
-                  shortName: tr.shortName || tr.subjectCode,
+                  subjectCode: item.subjectCode,
+                  subjectName: item.subjectName,
+                  shortName: item.shortName || item.subjectCode,
                   facultyName: facs.join(", "),
                   facultyNames: facs,
-                  type: tr.type || "Training",
-                  difficulty: tr.difficulty || "Normal",
-                  isTraining: true,
-                  room: "Training Hall / LH-1"
+                  type: item.type || "Theory",
+                  difficulty: item.difficulty || "Normal",
+                  isTraining: !!item.isTraining,
+                  room: item.isTraining ? "Training Hall / LH-1" : "LH-1"
                 };
                 facs.forEach(f => markFacultyBusy(f, day, p, ck));
               });
 
-              remainingHours -= blockDur;
+              item.placedBlocksHours += blockDur;
               blockPlaced = true;
               break;
             }
-          }
-
-          if (!blockPlaced) {
-            tr.leftoverHours = remainingHours;
-            break;
           }
         }
       });
@@ -707,22 +745,22 @@ router.post("/generate", async (req, res) => {
     // --- STEP B: PLACE THEORY, SEMINAR, LIBRARY, & CUSTOM SUBJECTS ---
     // Uses Round-Robin Interleaving + Period Diversity Penalty + Faculty 1st Hour Protection
     classKeys.forEach(ck => {
-      const classTheory = classGroups[ck].allocations.filter(a => !isBlockType(a.type) && !isTrainingSubject(a));
-      
-      // Also add any training subjects that had leftover hours that couldn't fit a full block
-      const classTrainingWithLeftovers = classGroups[ck].allocations.filter(a => isTrainingSubject(a) && !isBlockType(a.type) && a.leftoverHours > 0);
-      classTrainingWithLeftovers.forEach(tr => {
-        classTheory.push({
-          ...tr,
-          requiredHours: tr.leftoverHours,
-          hoursAssigned: 0
-        });
-      });
-      
-      // Initialize hours tracking for round-robin
-      classTheory.forEach(subj => {
-        subj.requiredHours = Number(subj.hoursPerWeek) || 4;
-        subj.hoursAssigned = subj.advisorHourPlaced ? 1 : 0;
+      const classTheory = [];
+
+      classGroups[ck].allocations.forEach(a => {
+        if (isBlockType(a.type)) return;
+
+        const placedHours = a.placedBlocksHours || 0;
+        const totalNeeded = Number(a.hoursPerWeek) || 4;
+        const remainingSingleHours = Math.max(0, totalNeeded - placedHours);
+
+        if (remainingSingleHours > 0) {
+          classTheory.push({
+            ...(a.toObject ? a.toObject() : a),
+            requiredHours: remainingSingleHours,
+            hoursAssigned: (a.advisorHourPlaced && placedHours === 0) ? 1 : 0
+          });
+        }
       });
 
       // Round-robin distribution: Assign 1 hour per subject per round
