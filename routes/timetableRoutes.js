@@ -500,26 +500,49 @@ router.post("/generate", async (req, res) => {
       return t.includes("training") || t.includes("trainer");
     };
 
-    // Helper: Parse slot pattern into continuous chunks & single hours (Supports "2+2", "2+1+1", "3+1", "4", "3", "2", "regular")
+    // Helper: Parse slot pattern into continuous chunks & single hours
+    // Generic parser: Supports presets ("2+2", "2+1", "2+1+1", "3+1", "4", "3", "2") and ANY custom pattern (e.g. "2+1", "3+2", "2+2+1", "1+1+2")
     const parseSlotPattern = (pat, hours, isTr, type) => {
       const total = Number(hours) || 4;
       const cleanPat = (pat || "").trim().toLowerCase();
 
-      if (cleanPat === "2+2") return { blocks: [2, 2], singles: Math.max(0, total - 4) };
-      if (cleanPat === "2+1+1") return { blocks: [2], singles: Math.max(0, total - 2) };
-      if (cleanPat === "3+1") return { blocks: [3], singles: Math.max(0, total - 3) };
-      if (cleanPat === "4") return { blocks: [4], singles: Math.max(0, total - 4) };
-      if (cleanPat === "3") return { blocks: [3], singles: Math.max(0, total - 3) };
-      if (cleanPat === "2") return { blocks: [2], singles: Math.max(0, total - 2) };
-      if (cleanPat === "4+3") return { blocks: [4, 3], singles: Math.max(0, total - 7) };
-      if (cleanPat === "2+2+1") return { blocks: [2, 2], singles: Math.max(0, total - 4) };
-      if (cleanPat === "3+2") return { blocks: [3, 2], singles: Math.max(0, total - 5) };
+      // If regular or empty with no training flag
+      if (cleanPat === "regular" || (!cleanPat && !isTr && !(type && type.toLowerCase().includes("training")))) {
+        return { blocks: [], singles: total };
+      }
 
-      if (isTr || (type && type.toLowerCase().includes("training"))) {
-        if (total >= 7) return { blocks: [4, 3], singles: total - 7 };
-        if (total >= 4) return { blocks: [4], singles: total - 4 };
+      // If trainer flag without pattern: default based on hours
+      if (!cleanPat && (isTr || (type && type.toLowerCase().includes("training")))) {
+        if (total >= 7) return { blocks: [4, 3], singles: Math.max(0, total - 7) };
+        if (total >= 4) return { blocks: [4], singles: Math.max(0, total - 4) };
         if (total === 3) return { blocks: [3], singles: 0 };
         if (total === 2) return { blocks: [2], singles: 0 };
+        return { blocks: [], singles: total };
+      }
+
+      // Parse any custom expression containing numbers separated by '+', comma, or space (e.g. "2+1", "2+2", "3+1", "2+1+1", "4")
+      const parts = cleanPat.split(/[\+,\s\-\/]+/).map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n) && n > 0);
+
+      if (parts.length > 0) {
+        const blocks = [];
+        let singles = 0;
+        let patternSum = 0;
+
+        parts.forEach(p => {
+          patternSum += p;
+          if (p >= 2) {
+            blocks.push(p);
+          } else {
+            singles += p;
+          }
+        });
+
+        // If total hours allocated > sum of pattern, remainder goes to singles
+        if (total > patternSum) {
+          singles += (total - patternSum);
+        }
+
+        return { blocks, singles };
       }
 
       return { blocks: [], singles: total };
