@@ -417,15 +417,41 @@ router.post("/generate", async (req, res) => {
     // Helper: Checks if placing (facultyName, day, p) causes >= 3 consecutive hours for that faculty
     const causesFacultyContinuousFatigue = (facultyName, day, p) => {
       if (!facultyName) return false;
-      const left1 = p > 1 && !isFacultyFree(facultyName, day, p - 1);
-      const left2 = p > 2 && !isFacultyFree(facultyName, day, p - 2);
+      // Note: Lunch break is between Period 4 and Period 5 (01:00 - 01:45 PM), so p=4 and p=5 are separated by lunch
+      const left1 = p > 1 && p !== 5 && !isFacultyFree(facultyName, day, p - 1);
+      const left2 = p > 2 && p !== 5 && (p - 1) !== 5 && !isFacultyFree(facultyName, day, p - 2);
       if (left1 && left2) return true;
 
-      const right1 = p < 7 && !isFacultyFree(facultyName, day, p + 1);
-      const right2 = p < 6 && !isFacultyFree(facultyName, day, p + 2);
+      const right1 = p < 7 && p !== 4 && !isFacultyFree(facultyName, day, p + 1);
+      const right2 = p < 6 && p !== 4 && (p + 1) !== 4 && !isFacultyFree(facultyName, day, p + 2);
       if (right1 && right2) return true;
 
       if (left1 && right1) return true;
+
+      return false;
+    };
+
+    // Helper: Checks if placing a multi-period continuous block causes >= 3 consecutive hours or excessive load for that faculty
+    const wouldCauseFacultyBlockFatigue = (facultyName, day, blockPeriods) => {
+      if (!facultyName) return false;
+      const minP = Math.min(...blockPeriods);
+      const maxP = Math.max(...blockPeriods);
+
+      // 1. If block itself is >= 2 hours, faculty CANNOT teach adjacent period without break!
+      // (Except across lunch break between Period 4 and Period 5)
+      if (minP > 1 && minP !== 5 && !isFacultyFree(facultyName, day, minP - 1)) {
+        return true; // Left adjacency: e.g. already teaching Period 2, and block is [3, 4] -> 4 consecutive hours!
+      }
+
+      if (maxP < 7 && maxP !== 4 && !isFacultyFree(facultyName, day, maxP + 1)) {
+        return true; // Right adjacency: e.g. block is [1, 2], and already teaching Period 3 -> 3 or 4 consecutive hours!
+      }
+
+      // 2. Daily fatigue check: Faculty should not exceed 4 total teaching hours on any single day
+      const daily = getFacultyDailyHours(facultyName, day);
+      if (daily + blockPeriods.length > 4) {
+        return true; // Avoids overloading faculty on 1 day when other days of the week are free
+      }
 
       return false;
     };
@@ -740,9 +766,10 @@ router.post("/generate", async (req, res) => {
             const classFree = block.periods.every(p => classGrid[ck][day][p] === null);
             if (!classFree) continue;
 
-            // Check if ALL assigned faculties are free for all periods (CRITICAL ZERO CLASH!)
+            // Check if ALL assigned faculties are free for all periods (CRITICAL ZERO CLASH & FATIGUE PROTECTION!)
             const allFacsFree = facs.every(f => 
-              block.periods.every(p => isFacultyFree(f, day, p))
+              block.periods.every(p => isFacultyFree(f, day, p)) &&
+              !wouldCauseFacultyBlockFatigue(f, day, block.periods)
             );
             if (!allFacsFree) continue;
 
@@ -806,13 +833,21 @@ router.post("/generate", async (req, res) => {
           let blockPlaced = false;
 
           // Days prioritized by:
-          // 1. Not already containing this subject today (strict skip)
-          // 2. Alternate day spacing from previously placed blocks of this subject (e.g. Monday -> Wednesday / Thursday)
-          // 3. Fewest existing blocks on that day
+          // 1. Not already containing this subject today in this class (strict skip)
+          // 2. Faculty daily workload: Prioritize days where faculty currently has FEWEST hours!
+          // 3. Alternate day spacing from previously placed blocks of this subject in this class
+          // 4. Fewest existing blocks on that day in this class
           const candidateDays = [...DAYS].sort((d1, d2) => {
             const hasSubj1 = classGrid[ck][d1] && PERIODS.some(p => classGrid[ck][d1][p]?.subjectCode === item.subjectCode) ? 100 : 0;
             const hasSubj2 = classGrid[ck][d2] && PERIODS.some(p => classGrid[ck][d2][p]?.subjectCode === item.subjectCode) ? 100 : 0;
             if (hasSubj1 !== hasSubj2) return hasSubj1 - hasSubj2;
+
+            // Prioritize days where faculty has fewer hours (balances faculty teaching across the whole week)
+            if (facs.length > 0) {
+              const facDaily1 = Math.max(...facs.map(f => getFacultyDailyHours(f, d1)));
+              const facDaily2 = Math.max(...facs.map(f => getFacultyDailyHours(f, d2)));
+              if (facDaily1 !== facDaily2) return facDaily1 - facDaily2;
+            }
 
             // Alternate day preference: Prefer days with >= 2 days gap from already placed block of this subject
             const placedDays = item.placedBlockDays || [];
@@ -847,8 +882,10 @@ router.post("/generate", async (req, res) => {
               const classFree = block.periods.every(p => classGrid[ck][day][p] === null);
               if (!classFree) continue;
 
+              // Check if ALL assigned faculties are free for all periods and no fatigue (>2 continuous hours)
               const allFacsFree = facs.every(f => 
-                block.periods.every(p => isFacultyFree(f, day, p))
+                block.periods.every(p => isFacultyFree(f, day, p)) &&
+                !wouldCauseFacultyBlockFatigue(f, day, block.periods)
               );
               if (!allFacsFree) continue;
 
@@ -935,9 +972,9 @@ router.post("/generate", async (req, res) => {
               // Calculate penalty score (lower score is better)
               let score = 0;
 
-              // Rule 1: Avoid 3 or more continuous periods for faculty (Faculty fatigue protection)
+              // Rule 1: STRICT BAN on 3 or more continuous periods for faculty (Fatigue protection)
               if (fac && causesFacultyContinuousFatigue(fac, day, p)) {
-                score += 6000;
+                return; // Strictly reject: Never allow 3 or more continuous periods for faculty!
               }
 
               // Rule 2: Balance daily faculty load (avoid piling 4-5 hours onto 1 day)
