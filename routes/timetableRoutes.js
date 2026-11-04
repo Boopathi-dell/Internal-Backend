@@ -329,6 +329,8 @@ router.post("/generate", async (req, res) => {
       subjectMasters.forEach(sm => {
         (sm.subjects || []).forEach(s => {
           if (s.code) {
+            const keySem = `${sm.year}-${sm.semester}-${s.code.toUpperCase()}`;
+            curriculumMap[keySem] = s;
             curriculumMap[`${sm.year}-${s.code.toUpperCase()}`] = s;
             curriculumMap[s.code.toUpperCase()] = s;
           }
@@ -337,15 +339,22 @@ router.post("/generate", async (req, res) => {
 
       allocations.forEach(a => {
         const codeKey = a.subjectCode ? a.subjectCode.toUpperCase() : "";
-        const curr = curriculumMap[`${a.year}-${codeKey}`] || curriculumMap[codeKey];
+        const curr = curriculumMap[`${a.year}-${a.semester}-${codeKey}`] || curriculumMap[`${a.year}-${codeKey}`] || curriculumMap[codeKey];
         if (curr) {
-          if (curr.slotPattern && curr.slotPattern !== "regular") {
-            a.slotPattern = curr.slotPattern;
-            a.isTraining = true;
-          }
-          if (curr.difficulty && !a.difficulty) {
+          // STRICT: Whatever Admin configured for this subject in Curriculum Master MUST be enforced!
+          const chosenPattern = curr.slotPattern || a.slotPattern || "regular";
+          a.slotPattern = chosenPattern;
+          a.isTraining = chosenPattern !== "regular";
+
+          if (curr.difficulty) {
             a.difficulty = curr.difficulty;
           }
+          if (curr.hoursPerWeek) {
+            a.hoursPerWeek = Number(curr.hoursPerWeek);
+          }
+        } else {
+          a.slotPattern = a.slotPattern || "regular";
+          a.isTraining = a.slotPattern !== "regular";
         }
       });
     } catch (e) {
