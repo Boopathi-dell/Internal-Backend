@@ -1570,6 +1570,154 @@ router.put("/schedule/cell", async (req, res) => {
   }
 });
 
+// SYNC FACULTY: Updates faculty names across all existing schedule slots without regenerating the timetable
+router.post("/schedule/sync-faculty", async (req, res) => {
+  try {
+    const { department = "CSE", academicYear = "2026-2027", semesterType = "Odd", facultyNameReplacements, updatedAllocations } = req.body;
+    const doc = await TimetableSchedule.findOne({ department, academicYear, semesterType });
+    if (!doc) return res.status(404).json({ error: "Timetable schedule not found. Please generate timetable first." });
+
+    // Load allocations (from request payload if passed, or from TimetableAllocation collection)
+    let allocations = updatedAllocations;
+    if (!allocations || !Array.isArray(allocations) || allocations.length === 0) {
+      const allocDoc = await TimetableAllocation.findOne({ department, academicYear, semesterType });
+      allocations = allocDoc ? allocDoc.allocations : [];
+    }
+
+    // Build lookup map for subject -> faculty
+    const allocMap = {};
+    (allocations || []).forEach(a => {
+      if (!a) return;
+      const codeKey = (a.subjectCode || "").trim().toUpperCase();
+      const shortKey = (a.shortName || "").trim().toUpperCase();
+      let facNames = a.facultyNames && a.facultyNames.length > 0 ? a.facultyNames : (a.facultyName ? [a.facultyName] : []);
+      facNames = facNames.map(f => String(f || "").trim()).filter(Boolean);
+
+      if (facNames.length > 0) {
+        if (codeKey) {
+          allocMap[`${a.year}-${a.section}-${codeKey}`] = facNames;
+          allocMap[`${a.year}-${codeKey}`] = facNames;
+        }
+        if (shortKey) {
+          allocMap[`${a.year}-${a.section}-${shortKey}`] = facNames;
+          allocMap[`${a.year}-${shortKey}`] = facNames;
+        }
+      }
+    });
+
+    let updatedSlotsCount = 0;
+    (doc.classes || []).forEach(cls => {
+      DAYS.forEach(d => {
+        (cls.days[d] || []).forEach(slot => {
+          if (!slot || slot.type === "Free" || slot.subjectCode === "FREE") return;
+
+          let slotUpdated = false;
+
+          // 1. Direct name replacements (e.g. { "Balamurgan": "Balamurugan" })
+          if (facultyNameReplacements && typeof facultyNameReplacements === "object") {
+            if (slot.facultyName && facultyNameReplacements[slot.facultyName]) {
+              slot.facultyName = facultyNameReplacements[slot.facultyName];
+              slotUpdated = true;
+            }
+            if (Array.isArray(slot.facultyNames) && slot.facultyNames.length > 0) {
+              const mapped = slot.facultyNames.map(f => facultyNameReplacements[f] || f);
+              if (mapped.some((f, idx) => f !== slot.facultyNames[idx])) {
+                slot.facultyNames = mapped;
+                slot.facultyName = mapped.join(", ");
+                slotUpdated = true;
+              }
+            }
+          }
+
+          // 2. Sync from latest allocations map
+          const codeUpper = (slot.subjectCode || "").trim().toUpperCase();
+          const shortUpper = (slot.shortName || "").trim().toUpperCase();
+          const matchedFacs = allocMap[`${cls.year}-${cls.section}-${codeUpper}`] ||
+                             allocMap[`${cls.year}-${cls.section}-${shortUpper}`] ||
+                             allocMap[`${cls.year}-${codeUpper}`] ||
+                             allocMap[`${cls.year}-${shortUpper}`];
+
+          if (matchedFacs && matchedFacs.length > 0) {
+            const newFacStr = matchedFacs.join(", ");
+            if (slot.facultyName !== newFacStr) {
+              slot.facultyNames = matchedFacs;
+              slot.facultyName = newFacStr;
+              slotUpdated = true;
+            }
+          }
+
+          if (slotUpdated) updatedSlotsCount++;
+        });
+      });
+    });
+
+    doc.markModified("classes");
+    await doc.save();
+
+    // Recalculate facultySchedules for all staff
+    const allStaffMembers = await Staff.find({ department });
+    const facultySchedules = {};
+    allStaffMembers.forEach(s => {
+      facultySchedules[s.name] = {
+        name: s.name,
+        designation: s.designation,
+        theoryCount: 0,
+        labCount: 0,
+        totalHours: 0,
+        days: { Monday: [], Tuesday: [], Wednesday: [], Thursday: [], Friday: [] }
+      };
+      DAYS.forEach(d => {
+        facultySchedules[s.name].days[d] = PERIODS.map(p => ({
+          period: p,
+          time: (doc.periodTimings && doc.periodTimings[p]) || DEFAULT_TIMINGS[p] || "09:10-10:05",
+          occupied: false,
+          classKey: "",
+          subjectName: "",
+          type: "Free"
+        }));
+      });
+    });
+
+    doc.classes.forEach(cItem => {
+      DAYS.forEach(d => {
+        (cItem.days[d] || []).forEach(slot => {
+          if (slot.type === "Free" || slot.subjectCode === "FREE") return;
+          const facList = slot.facultyNames && slot.facultyNames.length > 0 ? slot.facultyNames : (slot.facultyName ? [slot.facultyName] : []);
+          facList.forEach(fac => {
+            const cleanFac = String(fac || "").trim();
+            if (facultySchedules[cleanFac]) {
+              const periodIdx = slot.period - 1;
+              if (facultySchedules[cleanFac].days[d] && facultySchedules[cleanFac].days[d][periodIdx]) {
+                facultySchedules[cleanFac].days[d][periodIdx] = {
+                  period: slot.period,
+                  time: slot.time,
+                  occupied: true,
+                  classKey: cItem.classKey,
+                  subjectCode: slot.subjectCode,
+                  subjectName: slot.subjectName,
+                  shortName: slot.shortName,
+                  type: slot.type,
+                  room: slot.room
+                };
+              }
+            }
+          });
+        });
+      });
+    });
+
+    res.json({
+      success: true,
+      message: `Faculty names updated successfully in timetable schedule! (${updatedSlotsCount} slots updated)`,
+      classes: doc.classes,
+      facultySchedules
+    });
+  } catch (err) {
+    console.error("Sync Faculty Route Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ==========================================
 // 5. LOCK & VERSION HISTORY ROUTES
 // ==========================================
