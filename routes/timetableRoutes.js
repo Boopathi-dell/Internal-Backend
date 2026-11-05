@@ -201,7 +201,7 @@ async function cascadeFacultyNameChange(oldName, newName, department = "CSE") {
 // 1. STAFF MASTER ROUTES
 // ==========================================
 
-// GET all staff members (with automatic deduplication)
+// GET all staff members
 router.get("/staff", async (req, res) => {
   try {
     const { department } = req.query;
@@ -210,31 +210,7 @@ router.get("/staff", async (req, res) => {
       filter.department = { $regex: new RegExp(`^${department}$`, "i") };
     }
     const staff = await Staff.find(filter).sort({ name: 1 });
-
-    // Deduplication check: if duplicate staff exist with matching fuzzy names
-    const seen = new Map();
-    const duplicatesToRemove = [];
-
-    staff.forEach(s => {
-      const clean = cleanFacString(s.name);
-      if (seen.has(clean)) {
-        const existing = seen.get(clean);
-        if (s.name.length > existing.name.length) {
-          duplicatesToRemove.push(existing._id);
-          seen.set(clean, s);
-        } else {
-          duplicatesToRemove.push(s._id);
-        }
-      } else {
-        seen.set(clean, s);
-      }
-    });
-
-    if (duplicatesToRemove.length > 0) {
-      Staff.deleteMany({ _id: { $in: duplicatesToRemove } }).catch(e => console.error("Deduplicate staff error:", e));
-    }
-
-    res.json(Array.from(seen.values()));
+    res.json(staff);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
