@@ -23,7 +23,34 @@ const DEFAULT_TIMINGS = {
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 const PERIODS = [1, 2, 3, 4, 5, 6, 7];
 
-// Normalizes a faculty name by stripping prefixes (Mr, Mrs, Dr, etc.) and non-alphanumeric characters
+// Edit distance calculation for minor typo tolerance
+function editDistance(s1, s2) {
+  const m = s1.length, n = s2.length;
+  const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (s1[i - 1] === s2[j - 1]) dp[i][j] = dp[i - 1][j - 1];
+      else dp[i][j] = 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+    }
+  }
+  return dp[m][n];
+}
+
+// Tokenizes a faculty name by stripping prefixes (Mr, Mrs, Dr, etc.) and separating into sorted word tokens
+function cleanFacTokens(str) {
+  if (!str) return [];
+  return String(str)
+    .toLowerCase()
+    .replace(/\b(mr|mrs|ms|dr|prof|head|ta|ap)\b/gi, " ")
+    .replace(/[^a-z0-9\s]/gi, " ")
+    .split(/\s+/)
+    .filter(t => t.length > 0)
+    .sort();
+}
+
+// Normalizes a faculty name by stripping prefixes and non-alphanumerics
 const cleanFacString = (str) => {
   if (!str) return "";
   return String(str)
@@ -33,19 +60,55 @@ const cleanFacString = (str) => {
     .trim();
 };
 
-// Fuzzy comparison that matches e.g. "Ravikumar", "k.ravikumar", "Mr K.Ravikumar", "K.Ravikumar"
+// Robust comparison that matches:
+// 1. Initial before vs after name: "Mrs.S.Priya" vs "Priya S" vs "S. Priya"
+// 2. Prefixes: "Mr K.Ravikumar" vs "k.ravikumar" vs "Ravikumar"
+// 3. Typo with same initials: "Mr.S.Balamurgan" vs "Balamurugan"
+// 4. Protects distinct names like "Mrs.S.Priya" vs "Mrs.S.Haripriya" or "Mrs.S.Priyanka"
 const isSameFacultyName = (nameA, nameB) => {
   if (!nameA || !nameB) return false;
   const a = String(nameA).trim().toLowerCase();
   const b = String(nameB).trim().toLowerCase();
   if (a === b) return true;
-  const cleanA = cleanFacString(a);
-  const cleanB = cleanFacString(b);
-  if (!cleanA || !cleanB) return false;
-  if (cleanA === cleanB) return true;
-  if (cleanA.length >= 4 && cleanB.length >= 4) {
-    if (cleanA.includes(cleanB) || cleanB.includes(cleanA)) return true;
+
+  const tokensA = cleanFacTokens(a);
+  const tokensB = cleanFacTokens(b);
+  if (tokensA.length === 0 || tokensB.length === 0) return false;
+
+  const joinA = tokensA.join("_");
+  const joinB = tokensB.join("_");
+  if (joinA === joinB) return true;
+
+  // Compare core names (tokens with length > 1, i.e. not single-letter initials)
+  const coreA = tokensA.filter(t => t.length > 1);
+  const coreB = tokensB.filter(t => t.length > 1);
+
+  if (coreA.length > 0 && coreB.length > 0) {
+    if (coreA.join("_") === coreB.join("_")) {
+      // If initials also exist on both, ensure they don't clash
+      const initA = tokensA.filter(t => t.length === 1);
+      const initB = tokensB.filter(t => t.length === 1);
+      if (initA.length > 0 && initB.length > 0 && initA.join("") !== initB.join("")) {
+        return false;
+      }
+      return true;
+    }
+
+    // Single core token with minor typo (e.g. balamurgan vs balamurugan)
+    if (coreA.length === 1 && coreB.length === 1) {
+      const ca = coreA[0], cb = coreB[0];
+      const dist = editDistance(ca, cb);
+      if (dist <= 1 && Math.min(ca.length, cb.length) >= 6) {
+        const initA = tokensA.filter(t => t.length === 1);
+        const initB = tokensB.filter(t => t.length === 1);
+        if (initA.length > 0 && initB.length > 0 && initA.join("") !== initB.join("")) {
+          return false;
+        }
+        return true;
+      }
+    }
   }
+
   return false;
 };
 
@@ -468,11 +531,192 @@ router.post("/staff/replace-name", async (req, res) => {
   }
 });
 
-// DELETE a staff member
+// CASCADE UNASSIGN helper: removes a faculty name from allocations, schedule slots, and rebuilds routines
+async function unassignFacultyEverywhere(facultyName, department = "CSE") {
+  if (!facultyName) return { allocations: null, classes: null, facultySchedules: null };
+  const deptUpper = (department || "CSE").toUpperCase();
+
+  // 1. Delete from Staff collection (any records matching this name)
+  try {
+    const allStaff = await Staff.find({ department: deptUpper });
+    for (const s of allStaff) {
+      if (isSameFacultyName(s.name, facultyName)) {
+        await Staff.findByIdAndDelete(s._id);
+      }
+    }
+  } catch (err) {
+    console.error("Error deleting staff records:", err);
+  }
+
+  // 2. Unassign in all TimetableAllocation docs
+  let updatedAllocations = null;
+  const allAllocDocs = await TimetableAllocation.find({});
+  for (const aDoc of allAllocDocs) {
+    let modified = false;
+    (aDoc.allocations || []).forEach(item => {
+      if (item.facultyName && isSameFacultyName(item.facultyName, facultyName)) {
+        item.facultyName = "";
+        modified = true;
+      }
+      if (Array.isArray(item.facultyNames) && item.facultyNames.length > 0) {
+        const filtered = item.facultyNames.filter(f => !isSameFacultyName(f, facultyName));
+        if (filtered.length !== item.facultyNames.length) {
+          item.facultyNames = filtered;
+          item.facultyName = filtered.join(", ");
+          modified = true;
+        }
+      }
+    });
+    if (aDoc.classAdvisors) {
+      Object.keys(aDoc.classAdvisors).forEach(ck => {
+        if (aDoc.classAdvisors[ck] && isSameFacultyName(aDoc.classAdvisors[ck], facultyName)) {
+          aDoc.classAdvisors[ck] = "";
+          modified = true;
+        }
+      });
+    }
+    if (modified) {
+      aDoc.markModified("allocations");
+      aDoc.markModified("classAdvisors");
+      await aDoc.save();
+    }
+    updatedAllocations = aDoc.allocations;
+  }
+
+  // 3. Unassign in all TimetableSchedule docs and rebuild routines
+  let updatedClasses = null;
+  let updatedFacultySchedules = null;
+  const allSchedDocs = await TimetableSchedule.find({});
+  const remainingStaff = await Staff.find({ department: deptUpper });
+
+  for (const sDoc of allSchedDocs) {
+    let modified = false;
+    (sDoc.classes || []).forEach(cls => {
+      DAYS.forEach(d => {
+        (cls.days[d] || []).forEach(slot => {
+          if (!slot || slot.type === "Free" || slot.subjectCode === "FREE") return;
+
+          if (slot.facultyName && isSameFacultyName(slot.facultyName, facultyName)) {
+            slot.facultyName = "";
+            modified = true;
+          }
+          if (Array.isArray(slot.facultyNames) && slot.facultyNames.length > 0) {
+            const filtered = slot.facultyNames.filter(f => !isSameFacultyName(f, facultyName));
+            if (filtered.length !== slot.facultyNames.length) {
+              slot.facultyNames = filtered;
+              slot.facultyName = filtered.join(", ");
+              modified = true;
+            }
+          }
+        });
+      });
+    });
+
+    // Rebuild faculty routines for remaining staff
+    const facultySchedules = {};
+    remainingStaff.forEach(s => {
+      facultySchedules[s.name] = {
+        name: s.name,
+        designation: s.designation,
+        theoryCount: 0,
+        labCount: 0,
+        totalHours: 0,
+        days: { Monday: [], Tuesday: [], Wednesday: [], Thursday: [], Friday: [] }
+      };
+      DAYS.forEach(d => {
+        facultySchedules[s.name].days[d] = PERIODS.map(p => ({
+          period: p,
+          time: (sDoc.periodTimings && sDoc.periodTimings[p]) || DEFAULT_TIMINGS[p] || "09:10-10:05",
+          occupied: false,
+          classKey: "",
+          subjectName: "",
+          type: "Free"
+        }));
+      });
+    });
+
+    (sDoc.classes || []).forEach(cItem => {
+      DAYS.forEach(d => {
+        (cItem.days[d] || []).forEach(slot => {
+          if (slot.type === "Free" || slot.subjectCode === "FREE") return;
+          const facList = slot.facultyNames && slot.facultyNames.length > 0 ? slot.facultyNames : (slot.facultyName ? [slot.facultyName] : []);
+          facList.forEach(fac => {
+            const cleanFac = String(fac || "").trim();
+            let targetKey = cleanFac;
+            if (!facultySchedules[targetKey]) {
+              const matchedKey = Object.keys(facultySchedules).find(k => isSameFacultyName(k, cleanFac));
+              if (matchedKey) targetKey = matchedKey;
+            }
+            if (facultySchedules[targetKey]) {
+              const periodIdx = slot.period - 1;
+              if (facultySchedules[targetKey].days[d] && facultySchedules[targetKey].days[d][periodIdx]) {
+                facultySchedules[targetKey].days[d][periodIdx] = {
+                  period: slot.period,
+                  time: slot.time || DEFAULT_TIMINGS[slot.period],
+                  occupied: true,
+                  classKey: cItem.classKey,
+                  subjectCode: slot.subjectCode,
+                  subjectName: slot.subjectName,
+                  shortName: slot.shortName,
+                  type: slot.type || "Theory"
+                };
+                facultySchedules[targetKey].totalHours += 1;
+                if (slot.type === "Laboratory") facultySchedules[targetKey].labCount += 1;
+                else facultySchedules[targetKey].theoryCount += 1;
+              }
+            }
+          });
+        });
+      });
+    });
+
+    sDoc.facultySchedules = Object.values(facultySchedules);
+    if (modified) sDoc.markModified("classes");
+    sDoc.markModified("facultySchedules");
+    await sDoc.save();
+    updatedClasses = sDoc.classes;
+    updatedFacultySchedules = facultySchedules;
+  }
+
+  return { allocations: updatedAllocations, classes: updatedClasses, facultySchedules: updatedFacultySchedules };
+}
+
+// DELETE a staff member (with full cascade delete across allocations & schedule)
 router.delete("/staff/:id", async (req, res) => {
   try {
-    await Staff.findByIdAndDelete(req.params.id);
-    res.json({ success: true });
+    const staffDoc = await Staff.findById(req.params.id);
+    const staffName = staffDoc ? staffDoc.name : "";
+    const department = (staffDoc && staffDoc.department) || "CSE";
+
+    if (req.params.id) {
+      await Staff.findByIdAndDelete(req.params.id);
+    }
+
+    const cascadeRes = await unassignFacultyEverywhere(staffName, department);
+
+    res.json({
+      success: true,
+      message: `Staff ${staffName || ""} deleted and unassigned everywhere!`,
+      ...cascadeRes
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// UNASSIGN / REMOVE faculty by name (works for registered staff or ghost names from allocations)
+router.post("/staff/unassign-name", async (req, res) => {
+  try {
+    const { name, department = "CSE" } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: "Faculty name is required" });
+    }
+    const cascadeRes = await unassignFacultyEverywhere(name.trim(), department);
+    res.json({
+      success: true,
+      message: `Faculty ${name} removed and unassigned everywhere!`,
+      ...cascadeRes
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
