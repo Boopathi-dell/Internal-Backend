@@ -730,8 +730,8 @@ router.post("/generate", async (req, res) => {
           { name: "Morning (3-4)", periods: [3, 4] },
           { name: "Afternoon (5-6)", periods: [5, 6] },
           { name: "Afternoon (6-7)", periods: [6, 7] },
-          { name: "Morning (2-3)", periods: [2, 3] },
-          { name: "Morning (1-2)", periods: [1, 2] } // Fallback only
+          { name: "Morning (2-3)", periods: [2, 3] }
+          // STRICT: Morning (1-2) is 100% REMOVED! Multi-period blocks must NEVER seize Period 1!
         ];
       }
       return [
@@ -932,8 +932,8 @@ router.post("/generate", async (req, res) => {
           for (let d = 0; d < candidateDays.length && !blockPlaced; d++) {
             const day = candidateDays[d];
 
-            // If item is a Lab (e.g. CDS-III 2+1), enforce MAX 1 LAB PER CLASS PER DAY!
-            if (isBlockType(item.type) && hasLabOnDay(ck, day)) {
+            // If item is a Lab / non-theory (e.g. CDS-III 2+1), enforce MAX 1 LAB PER CLASS PER DAY!
+            if ((isBlockType(item.type) || !isPureTheorySubject(item)) && hasLabOnDay(ck, day)) {
               continue;
             }
 
@@ -960,8 +960,11 @@ router.post("/generate", async (req, res) => {
                 continue;
               }
 
-              // STRICT: If block includes Period 1, ensure this subject hasn't already been in Period 1 on another day
+              // STRICT: Period 1 is ONLY for pure Core Theory! CDS-III, Labs, Seminars, Library are 100% FORBIDDEN from Period 1!
               if (block.periods.includes(1)) {
+                if (!isPureTheorySubject(item) || isBlockType(item.type)) {
+                  continue; // Labs and non-theory blocks are 100% FORBIDDEN from Period 1!
+                }
                 if (classGrid[ck][day][1] !== null || getSubjectPeriodCount(ck, item.subjectCode, 1) >= 1) {
                   continue;
                 }
@@ -1256,24 +1259,26 @@ router.post("/generate", async (req, res) => {
       });
     });
 
-    // --- STEP C: FILL REMAINING EMPTY PERIODS AS FREE/LIBRARY/SEMINAR ---
+    // --- STEP C: FILL REMAINING EMPTY PERIODS AS FREE / SELF STUDY ---
+    // STRICT USER REQUIREMENT:
+    // If the admin allocated 1 hour for LIB, LIB must appear EXACTLY 1 time! Never duplicate extra fake LIBs!
+    // If the admin allocated 1 hour for SEM, SEM must appear EXACTLY 1 time!
+    // Remaining unallocated periods are purely FREE / Self Study hours.
     classKeys.forEach(ck => {
       DAYS.forEach(day => {
         PERIODS.forEach(p => {
           if (classGrid[ck][day][p] === null) {
-            // Periods 2-7 can be Library or Seminar / Mentoring (Period 1 is guaranteed to be Theory)
-            const isLate = p >= 5;
             classGrid[ck][day][p] = {
               period: p,
               time: timings[p] || DEFAULT_TIMINGS[p],
-              subjectCode: isLate ? "LIB" : "SEM",
-              subjectName: isLate ? "Library / Reading Hour" : "Seminar / Mentoring",
-              shortName: isLate ? "LIB" : "SEM",
+              subjectCode: "FREE",
+              subjectName: "Free Period / Self Study",
+              shortName: "FREE",
               facultyName: "-",
               facultyNames: [],
-              type: isLate ? "Library" : "Seminar",
+              type: "Free",
               difficulty: "Light",
-              room: isLate ? "Library" : "Seminar Hall"
+              room: "-"
             };
           }
         });
