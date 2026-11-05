@@ -159,7 +159,7 @@ router.put("/staff/:id", async (req, res) => {
   }
 });
 
-// REPLACE FACULTY NAME GLOBALLY (across Staff, Allocations, Schedule, History)
+// REPLACE FACULTY NAME GLOBALLY (across Staff, Allocations, Schedule, and Faculty Routines)
 router.post("/staff/replace-name", async (req, res) => {
   try {
     const { fromName, toName, department = "CSE" } = req.body;
@@ -168,30 +168,36 @@ router.post("/staff/replace-name", async (req, res) => {
     }
     const cleanFrom = fromName.trim();
     const cleanTo = toName.trim();
+    const fromLower = cleanFrom.toLowerCase();
 
-    // 1. Update in Staff collection
-    await Staff.updateMany({ name: cleanFrom }, { $set: { name: cleanTo } });
+    // 1. Update in Staff collection (case-insensitive match)
+    await Staff.updateMany(
+      { name: { $regex: new RegExp(`^${cleanFrom.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") } },
+      { $set: { name: cleanTo } }
+    );
 
     // 2. Update in all TimetableAllocation docs
     const allocDocs = await TimetableAllocation.find({});
+    let lastAllocDoc = null;
     for (const doc of allocDocs) {
       let modified = false;
       (doc.allocations || []).forEach(a => {
-        if (a.facultyName === cleanFrom) {
+        if (a.facultyName && a.facultyName.trim().toLowerCase() === fromLower) {
           a.facultyName = cleanTo;
           modified = true;
         }
         if (Array.isArray(a.facultyNames)) {
-          const newNames = a.facultyNames.map(f => f === cleanFrom ? cleanTo : f);
+          const newNames = a.facultyNames.map(f => (f && f.trim().toLowerCase() === fromLower) ? cleanTo : f);
           if (newNames.some((f, idx) => f !== a.facultyNames[idx])) {
             a.facultyNames = newNames;
+            a.facultyName = newNames.join(", ");
             modified = true;
           }
         }
       });
       if (doc.classAdvisors) {
         Object.keys(doc.classAdvisors).forEach(ck => {
-          if (doc.classAdvisors[ck] === cleanFrom) {
+          if (doc.classAdvisors[ck] && doc.classAdvisors[ck].trim().toLowerCase() === fromLower) {
             doc.classAdvisors[ck] = cleanTo;
             modified = true;
           }
@@ -202,21 +208,25 @@ router.post("/staff/replace-name", async (req, res) => {
         doc.markModified("classAdvisors");
         await doc.save();
       }
+      lastAllocDoc = doc;
     }
 
-    // 3. Update in all TimetableSchedule docs
+    // 3. Update in all TimetableSchedule docs and rebuild faculty routines
     const schedDocs = await TimetableSchedule.find({});
+    let lastSchedDoc = null;
+    const allStaffMembers = await Staff.find({ department: department || "CSE" });
+
     for (const sDoc of schedDocs) {
       let modified = false;
       (sDoc.classes || []).forEach(cls => {
         DAYS.forEach(d => {
           (cls.days[d] || []).forEach(slot => {
-            if (slot.facultyName === cleanFrom) {
+            if (slot.facultyName && slot.facultyName.trim().toLowerCase() === fromLower) {
               slot.facultyName = cleanTo;
               modified = true;
             }
             if (Array.isArray(slot.facultyNames)) {
-              const newNames = slot.facultyNames.map(f => f === cleanFrom ? cleanTo : f);
+              const newNames = slot.facultyNames.map(f => (f && f.trim().toLowerCase() === fromLower) ? cleanTo : f);
               if (newNames.some((f, idx) => f !== slot.facultyNames[idx])) {
                 slot.facultyNames = newNames;
                 slot.facultyName = newNames.join(", ");
@@ -226,15 +236,74 @@ router.post("/staff/replace-name", async (req, res) => {
           });
         });
       });
-      if (modified) {
-        sDoc.markModified("classes");
-        await sDoc.save();
-      }
+
+      // Recalculate facultySchedules for all staff
+      const facultySchedules = {};
+      allStaffMembers.forEach(s => {
+        facultySchedules[s.name] = {
+          name: s.name,
+          designation: s.designation,
+          theoryCount: 0,
+          labCount: 0,
+          totalHours: 0,
+          days: { Monday: [], Tuesday: [], Wednesday: [], Thursday: [], Friday: [] }
+        };
+        DAYS.forEach(d => {
+          facultySchedules[s.name].days[d] = PERIODS.map(p => ({
+            period: p,
+            time: (sDoc.periodTimings && sDoc.periodTimings[p]) || DEFAULT_TIMINGS[p] || "09:10-10:05",
+            occupied: false,
+            classKey: "",
+            subjectName: "",
+            type: "Free"
+          }));
+        });
+      });
+
+      (sDoc.classes || []).forEach(cItem => {
+        DAYS.forEach(d => {
+          (cItem.days[d] || []).forEach(slot => {
+            if (slot.type === "Free" || slot.subjectCode === "FREE") return;
+            const facList = slot.facultyNames && slot.facultyNames.length > 0 ? slot.facultyNames : (slot.facultyName ? [slot.facultyName] : []);
+            facList.forEach(fac => {
+              const cleanFac = String(fac || "").trim();
+              if (facultySchedules[cleanFac]) {
+                const periodIdx = slot.period - 1;
+                if (facultySchedules[cleanFac].days[d] && facultySchedules[cleanFac].days[d][periodIdx]) {
+                  facultySchedules[cleanFac].days[d][periodIdx] = {
+                    period: slot.period,
+                    time: slot.time || DEFAULT_TIMINGS[slot.period],
+                    occupied: true,
+                    classKey: cItem.classKey,
+                    subjectCode: slot.subjectCode,
+                    subjectName: slot.subjectName,
+                    shortName: slot.shortName,
+                    type: slot.type || "Theory"
+                  };
+                  facultySchedules[cleanFac].totalHours += 1;
+                  if (slot.type === "Laboratory") facultySchedules[cleanFac].labCount += 1;
+                  else facultySchedules[cleanFac].theoryCount += 1;
+                }
+              }
+            });
+          });
+        });
+      });
+
+      sDoc.facultySchedules = Object.values(facultySchedules);
+      sDoc.markModified("classes");
+      sDoc.markModified("facultySchedules");
+      await sDoc.save();
+      modified = true;
+      lastSchedDoc = sDoc;
     }
 
     res.json({
       success: true,
-      message: `Replaced faculty name '${cleanFrom}' with '${cleanTo}' across all staff, allocations, and schedule slots!`
+      message: `Replaced faculty name '${cleanFrom}' with '${cleanTo}' across all staff, allocations, and schedule slots!`,
+      classes: lastSchedDoc ? lastSchedDoc.classes : null,
+      facultySchedules: lastSchedDoc ? lastSchedDoc.facultySchedules : null,
+      allocations: lastAllocDoc ? lastAllocDoc.allocations : null
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
