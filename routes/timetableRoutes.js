@@ -23,11 +23,185 @@ const DEFAULT_TIMINGS = {
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 const PERIODS = [1, 2, 3, 4, 5, 6, 7];
 
+// Normalizes a faculty name by stripping prefixes (Mr, Mrs, Dr, etc.) and non-alphanumeric characters
+const cleanFacString = (str) => {
+  if (!str) return "";
+  return String(str)
+    .toLowerCase()
+    .replace(/\b(mr|mrs|ms|dr|prof|head|ta|ap)\b/gi, "")
+    .replace(/[^a-z0-9]/gi, "")
+    .trim();
+};
+
+// Fuzzy comparison that matches e.g. "Ravikumar", "k.ravikumar", "Mr K.Ravikumar", "K.Ravikumar"
+const isSameFacultyName = (nameA, nameB) => {
+  if (!nameA || !nameB) return false;
+  const a = String(nameA).trim().toLowerCase();
+  const b = String(nameB).trim().toLowerCase();
+  if (a === b) return true;
+  const cleanA = cleanFacString(a);
+  const cleanB = cleanFacString(b);
+  if (!cleanA || !cleanB) return false;
+  if (cleanA === cleanB) return true;
+  if (cleanA.length >= 4 && cleanB.length >= 4) {
+    if (cleanA.includes(cleanB) || cleanB.includes(cleanA)) return true;
+  }
+  return false;
+};
+
+// CASCADE helper: automatically updates allocations, schedule slots, and faculty routines everywhere
+async function cascadeFacultyNameChange(oldName, newName, department = "CSE") {
+  if (!oldName || !newName) {
+    return { allocations: null, classes: null, facultySchedules: null };
+  }
+
+  const deptUpper = (department || "CSE").toUpperCase();
+
+  // 1. Delete any other duplicate staff records in Staff collection matching oldName
+  try {
+    const allStaff = await Staff.find({ department: deptUpper });
+    for (const s of allStaff) {
+      if (s.name !== newName && isSameFacultyName(s.name, oldName)) {
+        await Staff.findByIdAndDelete(s._id);
+      }
+    }
+  } catch (err) {
+    console.error("Error cleaning duplicate staff:", err);
+  }
+
+  // 2. Cascade in all TimetableAllocation docs
+  let updatedAllocations = null;
+  const allAllocDocs = await TimetableAllocation.find({});
+  for (const aDoc of allAllocDocs) {
+    let modified = false;
+    (aDoc.allocations || []).forEach(item => {
+      if (item.facultyName && isSameFacultyName(item.facultyName, oldName)) {
+        item.facultyName = newName;
+        modified = true;
+      }
+      if (Array.isArray(item.facultyNames) && item.facultyNames.length > 0) {
+        const mapped = item.facultyNames.map(f => isSameFacultyName(f, oldName) ? newName : f);
+        if (mapped.some((f, idx) => f !== item.facultyNames[idx])) {
+          item.facultyNames = mapped;
+          item.facultyName = mapped.join(", ");
+          modified = true;
+        }
+      }
+    });
+    if (aDoc.classAdvisors) {
+      Object.keys(aDoc.classAdvisors).forEach(ck => {
+        if (aDoc.classAdvisors[ck] && isSameFacultyName(aDoc.classAdvisors[ck], oldName)) {
+          aDoc.classAdvisors[ck] = newName;
+          modified = true;
+        }
+      });
+    }
+    if (modified) {
+      aDoc.markModified("allocations");
+      aDoc.markModified("classAdvisors");
+      await aDoc.save();
+    }
+    updatedAllocations = aDoc.allocations;
+  }
+
+  // 3. Cascade in all TimetableSchedule docs and rebuild faculty routines
+  let updatedClasses = null;
+  let updatedFacultySchedules = null;
+  const allSchedDocs = await TimetableSchedule.find({});
+  const allStaffMembers = await Staff.find({ department: deptUpper });
+
+  for (const sDoc of allSchedDocs) {
+    let modified = false;
+    (sDoc.classes || []).forEach(cls => {
+      DAYS.forEach(d => {
+        (cls.days[d] || []).forEach(slot => {
+          if (!slot || slot.type === "Free" || slot.subjectCode === "FREE") return;
+
+          if (slot.facultyName && isSameFacultyName(slot.facultyName, oldName)) {
+            slot.facultyName = newName;
+            modified = true;
+          }
+          if (Array.isArray(slot.facultyNames) && slot.facultyNames.length > 0) {
+            const mapped = slot.facultyNames.map(f => isSameFacultyName(f, oldName) ? newName : f);
+            if (mapped.some((f, idx) => f !== slot.facultyNames[idx])) {
+              slot.facultyNames = mapped;
+              slot.facultyName = mapped.join(", ");
+              modified = true;
+            }
+          }
+        });
+      });
+    });
+
+    // Rebuild facultySchedules routines for all staff
+    const facultySchedules = {};
+    allStaffMembers.forEach(s => {
+      facultySchedules[s.name] = {
+        name: s.name,
+        designation: s.designation,
+        theoryCount: 0,
+        labCount: 0,
+        totalHours: 0,
+        days: { Monday: [], Tuesday: [], Wednesday: [], Thursday: [], Friday: [] }
+      };
+      DAYS.forEach(d => {
+        facultySchedules[s.name].days[d] = PERIODS.map(p => ({
+          period: p,
+          time: (sDoc.periodTimings && sDoc.periodTimings[p]) || DEFAULT_TIMINGS[p] || "09:10-10:05",
+          occupied: false,
+          classKey: "",
+          subjectName: "",
+          type: "Free"
+        }));
+      });
+    });
+
+    (sDoc.classes || []).forEach(cItem => {
+      DAYS.forEach(d => {
+        (cItem.days[d] || []).forEach(slot => {
+          if (slot.type === "Free" || slot.subjectCode === "FREE") return;
+          const facList = slot.facultyNames && slot.facultyNames.length > 0 ? slot.facultyNames : (slot.facultyName ? [slot.facultyName] : []);
+          facList.forEach(fac => {
+            const cleanFac = String(fac || "").trim();
+            if (facultySchedules[cleanFac]) {
+              const periodIdx = slot.period - 1;
+              if (facultySchedules[cleanFac].days[d] && facultySchedules[cleanFac].days[d][periodIdx]) {
+                facultySchedules[cleanFac].days[d][periodIdx] = {
+                  period: slot.period,
+                  time: slot.time || DEFAULT_TIMINGS[slot.period],
+                  occupied: true,
+                  classKey: cItem.classKey,
+                  subjectCode: slot.subjectCode,
+                  subjectName: slot.subjectName,
+                  shortName: slot.shortName,
+                  type: slot.type || "Theory"
+                };
+                facultySchedules[cleanFac].totalHours += 1;
+                if (slot.type === "Laboratory") facultySchedules[cleanFac].labCount += 1;
+                else facultySchedules[cleanFac].theoryCount += 1;
+              }
+            }
+          });
+        });
+      });
+    });
+
+    sDoc.facultySchedules = Object.values(facultySchedules);
+    sDoc.markModified("classes");
+    sDoc.markModified("facultySchedules");
+    await sDoc.save();
+    updatedClasses = sDoc.classes;
+    updatedFacultySchedules = sDoc.facultySchedules;
+  }
+
+  return { allocations: updatedAllocations, classes: updatedClasses, facultySchedules: updatedFacultySchedules };
+}
+
 // ==========================================
 // 1. STAFF MASTER ROUTES
 // ==========================================
 
-// GET all staff members
+// GET all staff members (with automatic deduplication)
 router.get("/staff", async (req, res) => {
   try {
     const { department } = req.query;
@@ -36,24 +210,76 @@ router.get("/staff", async (req, res) => {
       filter.department = { $regex: new RegExp(`^${department}$`, "i") };
     }
     const staff = await Staff.find(filter).sort({ name: 1 });
-    res.json(staff);
+
+    // Deduplication check: if duplicate staff exist with matching fuzzy names
+    const seen = new Map();
+    const duplicatesToRemove = [];
+
+    staff.forEach(s => {
+      const clean = cleanFacString(s.name);
+      if (seen.has(clean)) {
+        const existing = seen.get(clean);
+        if (s.name.length > existing.name.length) {
+          duplicatesToRemove.push(existing._id);
+          seen.set(clean, s);
+        } else {
+          duplicatesToRemove.push(s._id);
+        }
+      } else {
+        seen.set(clean, s);
+      }
+    });
+
+    if (duplicatesToRemove.length > 0) {
+      Staff.deleteMany({ _id: { $in: duplicatesToRemove } }).catch(e => console.error("Deduplicate staff error:", e));
+    }
+
+    res.json(Array.from(seen.values()));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// CREATE a staff member
+// CREATE a staff member (with duplicate detection & merge)
 router.post("/staff", async (req, res) => {
   try {
     const { name, staffCode, email, department, designation, maxHoursPerWeek, maxTheory, maxLab, phone } = req.body;
     if (!name || !name.trim()) {
       return res.status(400).json({ error: "Staff name is required" });
     }
+    const cleanName = name.trim();
+    const deptUpper = (department || "CSE").toUpperCase();
+
+    // Check if an existing staff matches fuzzy name
+    const allStaff = await Staff.find({ department: deptUpper });
+    const existing = allStaff.find(s => isSameFacultyName(s.name, cleanName));
+
+    if (existing) {
+      // Merge & Update instead of creating duplicate!
+      const oldName = existing.name;
+      existing.name = cleanName;
+      if (staffCode) existing.staffCode = staffCode;
+      if (email) existing.email = email;
+      if (designation) existing.designation = designation;
+      if (maxHoursPerWeek) existing.maxHoursPerWeek = Number(maxHoursPerWeek);
+      if (maxTheory) existing.maxTheory = Number(maxTheory);
+      if (maxLab) existing.maxLab = Number(maxLab);
+      if (phone) existing.phone = phone;
+      await existing.save();
+
+      const cascaded = await cascadeFacultyNameChange(oldName, cleanName, deptUpper);
+      return res.json({
+        ...existing.toObject(),
+        ...cascaded,
+        message: `Updated existing faculty member and cascaded across timetable!`
+      });
+    }
+
     const staff = new Staff({
-      name: name.trim(),
+      name: cleanName,
       staffCode: staffCode || "",
       email: email || "",
-      department: (department || "CSE").toUpperCase(),
+      department: deptUpper,
       designation: designation || "Assistant Professor",
       maxHoursPerWeek: Number(maxHoursPerWeek) || 18,
       maxTheory: Number(maxTheory) || 2,
@@ -61,13 +287,19 @@ router.post("/staff", async (req, res) => {
       phone: phone || ""
     });
     await staff.save();
-    res.json(staff);
+
+    // Cascade rename in case allocations/schedule already had this name
+    const cascaded = await cascadeFacultyNameChange(cleanName, cleanName, deptUpper);
+    res.json({
+      ...staff.toObject(),
+      ...cascaded
+    });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-// UPDATE a staff member (with automatic cascade to Allocations and Timetable Schedule)
+// UPDATE a staff member (AUTOMATIC CASCADE EVERYWHERE: allocations, schedule slots, routines)
 router.put("/staff/:id", async (req, res) => {
   try {
     const { name, staffCode, email, department, designation, maxHoursPerWeek, maxTheory, maxLab, phone } = req.body;
@@ -76,12 +308,13 @@ router.put("/staff/:id", async (req, res) => {
 
     const oldName = oldStaff.name ? oldStaff.name.trim() : "";
     const newName = name ? name.trim() : oldName;
+    const deptUpper = (department || oldStaff.department || "CSE").toUpperCase();
 
     const updateData = {};
     if (name) updateData.name = newName;
     if (staffCode !== undefined) updateData.staffCode = staffCode;
     if (email !== undefined) updateData.email = email;
-    if (department) updateData.department = department.toUpperCase();
+    if (department) updateData.department = deptUpper;
     if (designation) updateData.designation = designation;
     if (maxHoursPerWeek !== undefined) updateData.maxHoursPerWeek = Number(maxHoursPerWeek);
     if (maxTheory !== undefined) updateData.maxTheory = Number(maxTheory);
@@ -90,70 +323,14 @@ router.put("/staff/:id", async (req, res) => {
 
     const staff = await Staff.findByIdAndUpdate(req.params.id, updateData, { new: true });
 
-    // CASCADE: If staff name was changed, immediately update in ALL TimetableAllocation & TimetableSchedule documents
-    if (oldName && newName && oldName !== newName) {
-      // 1. Cascade in TimetableAllocation
-      const allAllocDocs = await TimetableAllocation.find({});
-      for (const aDoc of allAllocDocs) {
-        let modified = false;
-        (aDoc.allocations || []).forEach(item => {
-          if (item.facultyName === oldName) {
-            item.facultyName = newName;
-            modified = true;
-          }
-          if (Array.isArray(item.facultyNames)) {
-            const mapped = item.facultyNames.map(f => f === oldName ? newName : f);
-            if (mapped.some((f, idx) => f !== item.facultyNames[idx])) {
-              item.facultyNames = mapped;
-              modified = true;
-            }
-          }
-        });
-        if (aDoc.classAdvisors) {
-          Object.keys(aDoc.classAdvisors).forEach(ck => {
-            if (aDoc.classAdvisors[ck] === oldName) {
-              aDoc.classAdvisors[ck] = newName;
-              modified = true;
-            }
-          });
-        }
-        if (modified) {
-          aDoc.markModified("allocations");
-          aDoc.markModified("classAdvisors");
-          await aDoc.save();
-        }
-      }
+    // AUTOMATIC CASCADE EVERYWHERE IN SYSTEM!
+    const cascaded = await cascadeFacultyNameChange(oldName, newName, deptUpper);
 
-      // 2. Cascade in TimetableSchedule
-      const allSchedDocs = await TimetableSchedule.find({});
-      for (const sDoc of allSchedDocs) {
-        let modified = false;
-        (sDoc.classes || []).forEach(cls => {
-          DAYS.forEach(d => {
-            (cls.days[d] || []).forEach(slot => {
-              if (slot.facultyName === oldName) {
-                slot.facultyName = newName;
-                modified = true;
-              }
-              if (Array.isArray(slot.facultyNames)) {
-                const mapped = slot.facultyNames.map(f => f === oldName ? newName : f);
-                if (mapped.some((f, idx) => f !== slot.facultyNames[idx])) {
-                  slot.facultyNames = mapped;
-                  slot.facultyName = mapped.join(", ");
-                  modified = true;
-                }
-              }
-            });
-          });
-        });
-        if (modified) {
-          sDoc.markModified("classes");
-          await sDoc.save();
-        }
-      }
-    }
-
-    res.json(staff);
+    res.json({
+      ...staff.toObject(),
+      ...cascaded,
+      message: `Faculty updated everywhere across Timetable & Workload!`
+    });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
