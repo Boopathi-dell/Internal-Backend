@@ -544,6 +544,17 @@ router.post("/generate", async (req, res) => {
       });
     };
 
+    // Helper: Checks if faculty already conducts any Lab / Laboratory on a given day across any class (Enforces MAX 1 LAB PER FACULTY PER DAY)
+    const doesFacultyHaveLabOnDay = (facultyName, day) => {
+      if (!facultyName || !facultyBusy[facultyName] || !facultyBusy[facultyName][day]) return false;
+      return PERIODS.some(p => {
+        const ck = facultyBusy[facultyName][day][p];
+        if (!ck) return false;
+        const slot = classGrid[ck] && classGrid[ck][day] && classGrid[ck][day][p];
+        return slot && isBlockType(slot.type);
+      });
+    };
+
     // Helper: Checks if subject is pure Core Theory (NO lab, seminar, library, mentoring, free)
     const isPureTheorySubject = (item) => {
       if (!item) return false;
@@ -803,11 +814,15 @@ router.post("/generate", async (req, res) => {
         const labDuration = Number(lab.hoursPerWeek) || 3;
         const candidateBlocks = getLabCandidateBlocks(labDuration);
 
-        // Distribute days across week: Prioritize days where this class has NO LAB today!
+        // Distribute days across week: Prioritize days where this class has NO LAB and faculty has NO LAB today!
         const candidateDays = [...DAYS].sort((d1, d2) => {
           const hasLab1 = hasLabOnDay(ck, d1) ? 100 : 0;
           const hasLab2 = hasLabOnDay(ck, d2) ? 100 : 0;
           if (hasLab1 !== hasLab2) return hasLab1 - hasLab2;
+
+          const facLab1 = facs.some(f => doesFacultyHaveLabOnDay(f, d1)) ? 150 : 0;
+          const facLab2 = facs.some(f => doesFacultyHaveLabOnDay(f, d2)) ? 150 : 0;
+          if (facLab1 !== facLab2) return facLab1 - facLab2;
 
           const c1 = getClassBlockCountOnDay(ck, d1);
           const c2 = getClassBlockCountOnDay(ck, d2);
@@ -821,6 +836,11 @@ router.post("/generate", async (req, res) => {
           // STRICT REQUIREMENT: At most 1 Lab per class per day!
           // If this class already has a Lab on this day, skip to another day!
           if (hasLabOnDay(ck, day)) {
+            continue;
+          }
+
+          // STRICT REQUIREMENT: At most 1 Lab per FACULTY per day! (A faculty cannot conduct 2 labs on the same day!)
+          if (facs.some(f => doesFacultyHaveLabOnDay(f, day))) {
             continue;
           }
 
@@ -932,27 +952,78 @@ router.post("/generate", async (req, res) => {
           for (let d = 0; d < candidateDays.length && !blockPlaced; d++) {
             const day = candidateDays[d];
 
-            // If item is a Lab / non-theory (e.g. CDS-III 2+1), enforce MAX 1 LAB PER CLASS PER DAY!
-            if ((isBlockType(item.type) || !isPureTheorySubject(item)) && hasLabOnDay(ck, day)) {
-              continue;
+            // If item is a Lab / non-theory (e.g. CDS-III 2+1), enforce MAX 1 LAB PER CLASS & PER FACULTY PER DAY!
+            if ((isBlockType(item.type) || !isPureTheorySubject(item))) {
+              if (hasLabOnDay(ck, day)) continue;
+              if (facs.some(f => doesFacultyHaveLabOnDay(f, day))) continue;
             }
 
             // Don't place two blocks of the SAME subject on the SAME day!
             const alreadyHasSubjToday = PERIODS.some(p => classGrid[ck][day][p]?.subjectCode === item.subjectCode);
             if (alreadyHasSubjToday) continue;
 
-            // Sort candidate blocks: avoid Period 7 for Tough/Maths, prefer keeping Period 1 open for theory
-            const sortedBlocks = [...candidateBlocks].sort((b1, b2) => {
+            // Score candidate blocks:
+            // 1. Tough/Maths strictly avoids Period 7
+            // 2. Period 1 strictly forbidden for non-theory/labs
+            // 3. Faculty period repetition penalty (prevents faculty from having P3-4 every single day!)
+            // 4. Class & Section morning/afternoon rotation (swaps Section A morning with Section B afternoon)
+            const scoredBlocks = candidateBlocks.map(block => {
+              let score = 0;
+
+              // Maths/Tough avoids Period 7
               if (isMathsOrToughSubject(item)) {
-                const b1P7 = b1.periods.includes(7) ? 100 : 0;
-                const b2P7 = b2.periods.includes(7) ? 100 : 0;
-                if (b1P7 !== b2P7) return b1P7 - b2P7;
+                if (block.periods.includes(7)) score += 99999;
+                if (block.periods.includes(6)) score += 8000;
               }
-              const b1P1 = b1.periods.includes(1) ? 50 : 0;
-              const b2P1 = b2.periods.includes(1) ? 50 : 0;
-              if (b1P1 !== b2P1) return b1P1 - b2P1;
-              return 0;
+
+              // Non-theory strictly avoids Period 1
+              if (!isPureTheorySubject(item) || isBlockType(item.type)) {
+                if (block.periods.includes(1)) score += 99999;
+              }
+
+              // Faculty Period Diversity across the week (Prevents P3-4 vertical stacking)
+              if (facs.length > 0) {
+                facs.forEach(f => {
+                  block.periods.forEach(p => {
+                    const pCount = getFacultyPeriodCount(f, p);
+                    if (pCount >= 2) {
+                      score += pCount * 4500; // Heavy penalty: faculty must NOT teach same period 3+ times!
+                    } else if (pCount === 1) {
+                      score += 1600; // Moderate penalty to encourage morning/afternoon rotation
+                    } else {
+                      score -= 900; // Bonus to pick periods the faculty hasn't taught yet this week
+                    }
+                  });
+                });
+              }
+
+              // Class Morning vs Afternoon balance for continuous blocks:
+              const isMorning = block.periods.some(p => p <= 4);
+              const classMorningBlocks = DAYS.filter(d => 
+                classGrid[ck][d] && (classGrid[ck][d][3]?.isTraining || classGrid[ck][d][4]?.isTraining)
+              ).length;
+              const classAfternoonBlocks = DAYS.filter(d => 
+                classGrid[ck][d] && (classGrid[ck][d][5]?.isTraining || classGrid[ck][d][6]?.isTraining)
+              ).length;
+
+              if (isMorning && classMorningBlocks > classAfternoonBlocks) {
+                score += 1500; // Prefer afternoon to balance class schedule
+              } else if (!isMorning && classAfternoonBlocks > classMorningBlocks) {
+                score += 1500;
+              }
+
+              // Section rotation: If Section A has this subject in Morning, prefer Afternoon for Section B
+              const sectionLetter = (classGroups[ck]?.section || "A").toUpperCase();
+              if (sectionLetter === "B") {
+                if (isMorning) score += 500;
+                else score -= 500;
+              }
+
+              return { block, score };
             });
+
+            scoredBlocks.sort((a, b) => a.score - b.score);
+            const sortedBlocks = scoredBlocks.map(sb => sb.block);
 
             for (const block of sortedBlocks) {
               // STRICT: If block includes Period 7 and subject is Maths / Tough, HARD BAN!
