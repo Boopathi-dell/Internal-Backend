@@ -163,10 +163,15 @@ async function cascadeFacultyNameChange(oldName, newName, department = "CSE") {
           const facList = slot.facultyNames && slot.facultyNames.length > 0 ? slot.facultyNames : (slot.facultyName ? [slot.facultyName] : []);
           facList.forEach(fac => {
             const cleanFac = String(fac || "").trim();
-            if (facultySchedules[cleanFac]) {
+            let targetKey = cleanFac;
+            if (!facultySchedules[targetKey]) {
+              const matchedKey = Object.keys(facultySchedules).find(k => isSameFacultyName(k, cleanFac));
+              if (matchedKey) targetKey = matchedKey;
+            }
+            if (facultySchedules[targetKey]) {
               const periodIdx = slot.period - 1;
-              if (facultySchedules[cleanFac].days[d] && facultySchedules[cleanFac].days[d][periodIdx]) {
-                facultySchedules[cleanFac].days[d][periodIdx] = {
+              if (facultySchedules[targetKey].days[d] && facultySchedules[targetKey].days[d][periodIdx]) {
+                facultySchedules[targetKey].days[d][periodIdx] = {
                   period: slot.period,
                   time: slot.time || DEFAULT_TIMINGS[slot.period],
                   occupied: true,
@@ -176,9 +181,9 @@ async function cascadeFacultyNameChange(oldName, newName, department = "CSE") {
                   shortName: slot.shortName,
                   type: slot.type || "Theory"
                 };
-                facultySchedules[cleanFac].totalHours += 1;
-                if (slot.type === "Laboratory") facultySchedules[cleanFac].labCount += 1;
-                else facultySchedules[cleanFac].theoryCount += 1;
+                facultySchedules[targetKey].totalHours += 1;
+                if (slot.type === "Laboratory") facultySchedules[targetKey].labCount += 1;
+                else facultySchedules[targetKey].theoryCount += 1;
               }
             }
           });
@@ -1915,10 +1920,16 @@ router.put("/schedule/cell", async (req, res) => {
             if (slot.type === "Free") return;
             const facList = slot.facultyNames && slot.facultyNames.length > 0 ? slot.facultyNames : (slot.facultyName ? [slot.facultyName] : []);
             facList.forEach(fac => {
-              if (facultySchedules[fac]) {
+              const cleanFac = String(fac || "").trim();
+              let targetKey = cleanFac;
+              if (!facultySchedules[targetKey]) {
+                const matchedKey = Object.keys(facultySchedules).find(k => isSameFacultyName(k, cleanFac));
+                if (matchedKey) targetKey = matchedKey;
+              }
+              if (facultySchedules[targetKey]) {
                 const periodIdx = slot.period - 1;
-                if (facultySchedules[fac].days[d] && facultySchedules[fac].days[d][periodIdx]) {
-                  facultySchedules[fac].days[d][periodIdx] = {
+                if (facultySchedules[targetKey].days[d] && facultySchedules[targetKey].days[d][periodIdx]) {
+                  facultySchedules[targetKey].days[d][periodIdx] = {
                     period: slot.period,
                     time: slot.time,
                     occupied: true,
@@ -1927,7 +1938,9 @@ router.put("/schedule/cell", async (req, res) => {
                     shortName: slot.shortName,
                     type: slot.type
                   };
-                  facultySchedules[fac].totalHours++;
+                  facultySchedules[targetKey].totalHours++;
+                  if (slot.type === "Laboratory") facultySchedules[targetKey].labCount = (facultySchedules[targetKey].labCount || 0) + 1;
+                  else facultySchedules[targetKey].theoryCount = (facultySchedules[targetKey].theoryCount || 0) + 1;
                 }
               }
             });
@@ -2058,10 +2071,15 @@ router.post("/schedule/sync-faculty", async (req, res) => {
           const facList = slot.facultyNames && slot.facultyNames.length > 0 ? slot.facultyNames : (slot.facultyName ? [slot.facultyName] : []);
           facList.forEach(fac => {
             const cleanFac = String(fac || "").trim();
-            if (facultySchedules[cleanFac]) {
+            let targetKey = cleanFac;
+            if (!facultySchedules[targetKey]) {
+              const matchedKey = Object.keys(facultySchedules).find(k => isSameFacultyName(k, cleanFac));
+              if (matchedKey) targetKey = matchedKey;
+            }
+            if (facultySchedules[targetKey]) {
               const periodIdx = slot.period - 1;
-              if (facultySchedules[cleanFac].days[d] && facultySchedules[cleanFac].days[d][periodIdx]) {
-                facultySchedules[cleanFac].days[d][periodIdx] = {
+              if (facultySchedules[targetKey].days[d] && facultySchedules[targetKey].days[d][periodIdx]) {
+                facultySchedules[targetKey].days[d][periodIdx] = {
                   period: slot.period,
                   time: slot.time,
                   occupied: true,
