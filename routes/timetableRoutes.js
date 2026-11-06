@@ -2336,7 +2336,8 @@ const buildFacultySchedules = async (doc, department) => {
 
   (doc.classes || []).forEach(cItem => {
     DAYS.forEach(d => {
-      (cItem.days[d] || []).forEach(slot => {
+      const daySlots = (cItem.days && (cItem.days[d] || (typeof cItem.days.get === "function" && cItem.days.get(d)))) || [];
+      daySlots.forEach(slot => {
         if (!slot || slot.type === "Free" || slot.subjectCode === "FREE") return;
         const facList = slot.facultyNames && slot.facultyNames.length > 0 ? slot.facultyNames : (slot.facultyName ? [slot.facultyName] : []);
         facList.forEach(fac => {
@@ -2347,16 +2348,37 @@ const buildFacultySchedules = async (doc, department) => {
             const matchedKey = Object.keys(facultySchedules).find(k => isSameFacultyName(k, cleanFac));
             if (matchedKey) targetKey = matchedKey;
           }
+          if (!facultySchedules[targetKey]) {
+            facultySchedules[targetKey] = {
+              name: targetKey,
+              designation: "Assistant Professor",
+              theoryCount: 0,
+              labCount: 0,
+              totalHours: 0,
+              days: { Monday: [], Tuesday: [], Wednesday: [], Thursday: [], Friday: [] }
+            };
+            DAYS.forEach(d2 => {
+              facultySchedules[targetKey].days[d2] = PERIODS.map(p2 => ({
+                period: p2,
+                time: DEFAULT_TIMINGS[p2],
+                occupied: false,
+                classKey: "",
+                subjectName: "",
+                type: "Free"
+              }));
+            });
+          }
           if (facultySchedules[targetKey]) {
             const periodIdx = slot.period - 1;
             if (facultySchedules[targetKey].days[d] && facultySchedules[targetKey].days[d][periodIdx]) {
               facultySchedules[targetKey].days[d][periodIdx] = {
                 period: slot.period,
-                time: slot.time,
+                time: slot.time || DEFAULT_TIMINGS[slot.period],
                 occupied: true,
                 classKey: cItem.classKey,
+                subjectCode: slot.subjectCode,
                 subjectName: slot.subjectName,
-                shortName: slot.shortName,
+                shortName: slot.shortName || slot.subjectCode,
                 type: slot.type
               };
               facultySchedules[targetKey].totalHours++;
@@ -2710,7 +2732,24 @@ router.get("/schedule", async (req, res) => {
         await schedule.save();
       }
     }
-    res.json(schedule || null);
+    if (!schedule) return res.json(null);
+
+    // Ensure facultySchedules is always populated in response
+    let facSchedules = schedule.facultySchedules;
+    if (!facSchedules || Object.keys(facSchedules).length === 0) {
+      facSchedules = await buildFacultySchedules(schedule, department);
+      try {
+        schedule.facultySchedules = facSchedules;
+        schedule.markModified("facultySchedules");
+        await schedule.save();
+      } catch (saveErr) {
+        console.warn("Could not save facultySchedules to schedule doc:", saveErr.message);
+      }
+    }
+
+    const scheduleObj = schedule.toObject();
+    scheduleObj.facultySchedules = facSchedules;
+    res.json(scheduleObj);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2725,13 +2764,15 @@ router.post("/schedule/fill-free", async (req, res) => {
 
     const sanitized = await sanitizeExcessSubjectHours(schedule, department);
     const healed = await healScheduleFreeSlots(schedule, department);
-    if (sanitized || healed) {
+    if (sanitized || healed || !schedule.facultySchedules || Object.keys(schedule.facultySchedules).length === 0) {
       schedule.facultySchedules = await buildFacultySchedules(schedule, department);
       schedule.markModified("classes");
       schedule.markModified("facultySchedules");
       await schedule.save();
     }
-    res.json({ success: true, message: "All periods successfully verified and conflict-free!", schedule });
+    const scheduleObj = schedule.toObject();
+    scheduleObj.facultySchedules = schedule.facultySchedules;
+    res.json({ success: true, message: "All periods successfully verified and conflict-free!", schedule: scheduleObj, facultySchedules: schedule.facultySchedules });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
