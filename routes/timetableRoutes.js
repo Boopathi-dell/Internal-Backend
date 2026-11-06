@@ -1046,48 +1046,79 @@ router.post("/generate", async (req, res) => {
       return Object.keys(facultyBusy[facultyName][day]).length;
     };
 
-    // Helper: Checks if placing (facultyName, day, p) causes >= 3 consecutive hours for that faculty
+    // Helper: Checks if faculty already has any multi-period block (>= 2 hours) on 'day' across any class
+    const doesFacultyHaveBlockOnDay = (facultyName, day) => {
+      if (!facultyName || !facultyBusy[facultyName] || !facultyBusy[facultyName][day]) return false;
+      return PERIODS.some(p => {
+        const ck = facultyBusy[facultyName][day][p];
+        if (!ck) return false;
+        const slot = classGrid[ck]?.[day]?.[p];
+        return slot && (isBlockType(slot.type) || slot.isTraining);
+      });
+    };
+
+    // Helper: Checks if placing (facultyName, day, p) causes consecutive / continuous teaching for that faculty
+    // STRICT USER REQUIREMENT: Faculty must NEVER have back-to-back continuous hours!
+    // They must have mandatory rest / preparation breaks between every class.
     const causesFacultyContinuousFatigue = (facultyName, day, p) => {
-      if (!facultyName) return false;
-      // Note: Lunch break is between Period 4 and Period 5 (01:00 - 01:45 PM), so p=4 and p=5 are separated by lunch
-      const left1 = p > 1 && p !== 5 && !isFacultyFree(facultyName, day, p - 1);
-      const left2 = p > 2 && p !== 5 && (p - 1) !== 5 && !isFacultyFree(facultyName, day, p - 2);
-      if (left1 && left2) return true;
+      if (!facultyName || facultyName === "-") return false;
 
-      const right1 = p < 7 && p !== 4 && !isFacultyFree(facultyName, day, p + 1);
-      const right2 = p < 6 && p !== 4 && (p + 1) !== 4 && !isFacultyFree(facultyName, day, p + 2);
-      if (right1 && right2) return true;
+      // 1. Immediate predecessor check: Is faculty already teaching Period p - 1?
+      // (Even across lunch break between P4 and P5, avoid back-to-back teaching without proper rest)
+      if (p > 1 && !isFacultyFree(facultyName, day, p - 1)) {
+        return true; // Strict consecutive ban: e.g. P1->P2, P2->P3, P3->P4, P4->P5, P5->P6, P6->P7
+      }
 
-      if (left1 && right1) return true;
+      // 2. Immediate successor check: Is faculty already teaching Period p + 1?
+      if (p < 7 && !isFacultyFree(facultyName, day, p + 1)) {
+        return true; // Strict consecutive ban: e.g. P1<-P2, P2<-P3, P3<-P4, P4<-P5, P5<-P6, P6<-P7
+      }
+
+      // Also prevent teaching Period 4 immediately into Period 5 (lunch break boundary)
+      if (p === 4 && !isFacultyFree(facultyName, day, 5)) return true;
+      if (p === 5 && !isFacultyFree(facultyName, day, 4)) return true;
+
+      // 3. Daily workload cap: Max 3 hours of theory per day (or max 4 only if conducting lab)
+      const dailyHours = getFacultyDailyHours(facultyName, day);
+      if (dailyHours >= 3) {
+        return true; // Avoid overloading faculty on 1 day when other days of the week are available
+      }
 
       return false;
     };
 
-    // Helper: Checks if placing a multi-period continuous block causes >= 3 consecutive hours or excessive load for that faculty
+    // Helper: Checks if placing a multi-period continuous block causes consecutive hours or excessive load for that faculty
     const wouldCauseFacultyBlockFatigue = (facultyName, day, blockPeriods) => {
-      if (!facultyName) return false;
+      if (!facultyName || facultyName === "-") return false;
       const minP = Math.min(...blockPeriods);
       const maxP = Math.max(...blockPeriods);
 
-      // 1. If block itself is >= 2 hours, faculty CANNOT teach adjacent period without break!
-      // (Except across lunch break between Period 4 and Period 5)
-      if (minP > 1 && minP !== 5 && !isFacultyFree(facultyName, day, minP - 1)) {
-        return true; // Left adjacency: e.g. already teaching Period 2, and block is [3, 4] -> 4 consecutive hours!
+      // 1. HARD BAN: Faculty can NEVER have more than 1 block session on the same day!
+      // (Stops faculty from teaching a lab in the morning AND another 2-hour block in the afternoon!)
+      if (doesFacultyHaveBlockOnDay(facultyName, day)) {
+        return true;
       }
 
-      if (maxP < 7 && maxP !== 4 && !isFacultyFree(facultyName, day, maxP + 1)) {
-        return true; // Right adjacency: e.g. block is [1, 2], and already teaching Period 3 -> 3 or 4 consecutive hours!
+      // 2. HARD BAN: Faculty CANNOT teach adjacent period immediately before or after the block!
+      if (minP > 1 && !isFacultyFree(facultyName, day, minP - 1)) {
+        return true; // e.g. If block is [3, 4], Period 2 must NOT be taught by this faculty!
+      }
+      if (maxP < 7 && !isFacultyFree(facultyName, day, maxP + 1)) {
+        return true; // e.g. If block is [3, 4], Period 5 must NOT be taught by this faculty!
       }
 
-      // If block is an Afternoon Lab/Block starting at Period 5, faculty MUST NOT teach Period 4 right before lunch!
+      // Across lunch break:
       if (minP === 5 && !isFacultyFree(facultyName, day, 4)) {
-        return true; // Give faculty proper rest before conducting a long afternoon session
+        return true; // If block is [5, 6], Period 4 must be free so faculty can rest during lunch!
+      }
+      if (maxP === 4 && !isFacultyFree(facultyName, day, 5)) {
+        return true; // If block is [3, 4], Period 5 must be free!
       }
 
-      // 2. Daily fatigue check: Faculty should not exceed 4 total teaching hours on any single day
+      // 3. Daily fatigue check: Total daily hours including this block must not exceed 4 hours!
       const daily = getFacultyDailyHours(facultyName, day);
       if (daily + blockPeriods.length > 4) {
-        return true; // Avoids overloading faculty on 1 day when other days of the week are free
+        return true;
       }
 
       return false;
@@ -1826,9 +1857,9 @@ router.post("/generate", async (req, res) => {
                 }
               }
 
-              // 🎯 Rule 3: STRICT BAN ON FACULTY CONTINUOUS FATIGUE (Never >= 3 continuous hours)
+              // 🎯 Rule 3: STRICT ZERO CONSECUTIVE / CONTINUOUS HOURS FOR FACULTY
               if (fac && causesFacultyContinuousFatigue(fac, day, p)) {
-                return; // Strictly reject: Never allow 3 or more continuous periods for faculty!
+                return; // Strictly reject: Faculty must have mandatory rest breaks between classes!
               }
 
               // STRICT: Avoid faculty teaching Period 4 right before an afternoon lab [5, 6, 7]
@@ -1836,23 +1867,23 @@ router.post("/generate", async (req, res) => {
                 return;
               }
 
-              // 🎯 Rule 4: Balance daily faculty load across the week
+              // 🎯 Rule 4: Balance daily faculty load across the week (Distribute teaching evenly)
               if (fac) {
                 const dailyHours = getFacultyDailyHours(fac, day);
-                if (dailyHours >= 4) {
-                  score += 6000;
-                } else if (dailyHours >= 3) {
-                  score += 2500;
+                if (dailyHours >= 3) {
+                  score += 9000;
+                } else if (dailyHours === 2) {
+                  score += 3500;
+                } else if (dailyHours === 1) {
+                  score += 800;
                 } else if (dailyHours === 0) {
-                  score -= 500; // Bonus to distribute teaching to days where faculty has 0 hours
-                } else {
-                  score += dailyHours * 100;
+                  score -= 2000; // Strong priority to assign classes on days where faculty currently has 0 hours!
                 }
               }
 
               // Prefer isolated periods with rest/prep breaks for faculty
               if (fac && hasAdjacentFacultyHour(fac, day, p)) {
-                score += 50;
+                score += 50000; // Massive penalty against adjacent hours
               }
 
               // 🎯 Rule 5: HARD BAN ON SAME THEORY SUBJECT OCCURRING TWICE ON THE SAME DAY!
@@ -2358,6 +2389,9 @@ const healScheduleFreeSlots = async (schedule, department) => {
 
             if (fac && fac !== "-") {
               if (busyFac[day][p]?.has(fac.toLowerCase())) continue;
+              // STRICT: Faculty must NOT be teaching adjacent period p - 1 or p + 1!
+              if (p > 1 && busyFac[day][p - 1]?.has(fac.toLowerCase())) continue;
+              if (p < 7 && busyFac[day][p + 1]?.has(fac.toLowerCase())) continue;
             }
 
             // Avoid same subject in adjacent period
