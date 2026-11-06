@@ -730,8 +730,8 @@ router.post("/staff/sync-users", async (req, res) => {
     for (const u of users) {
       if (!u.name || !u.name.trim()) continue;
       const cleanName = u.name.trim();
-      const existing = await Staff.findOne({ 
-        name: { $regex: new RegExp(`^${cleanName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") } 
+      const existing = await Staff.findOne({
+        name: { $regex: new RegExp(`^${cleanName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") }
       });
       if (!existing) {
         await Staff.create({
@@ -747,10 +747,10 @@ router.post("/staff/sync-users", async (req, res) => {
       }
     }
     const allStaff = await Staff.find().sort({ name: 1 });
-    res.json({ 
-      message: `Synced ${addedCount} faculty members from Users! (Total: ${allStaff.length})`, 
-      staff: allStaff, 
-      totalSynced: addedCount 
+    res.json({
+      message: `Synced ${addedCount} faculty members from Users! (Total: ${allStaff.length})`,
+      staff: allStaff,
+      totalSynced: addedCount
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -825,10 +825,10 @@ router.get("/allocation", async (req, res) => {
     const { department = "CSE", academicYear = "2026-2027", semesterType = "Odd" } = req.query;
     let allocation = await TimetableAllocation.findOne({ department, academicYear, semesterType });
     if (!allocation) {
-      allocation = { 
-        department, 
-        academicYear, 
-        semesterType, 
+      allocation = {
+        department,
+        academicYear,
+        semesterType,
         allocations: [],
         iqacNumber: "MEC/IQAC/2026 - 27/CSE/006",
         hallNumbers: {},
@@ -848,11 +848,11 @@ router.get("/allocation", async (req, res) => {
 // SAVE workload allocations, year-sections & class-advisors
 router.post("/allocation", async (req, res) => {
   try {
-    const { 
-      department = "CSE", 
-      academicYear = "2026-2027", 
-      semesterType = "Odd", 
-      allocations = [], 
+    const {
+      department = "CSE",
+      academicYear = "2026-2027",
+      semesterType = "Odd",
+      allocations = [],
       yearSections,
       classAdvisors,
       iqacNumber,
@@ -922,8 +922,8 @@ router.post("/generate", async (req, res) => {
     // Check if current timetable is LOCKED (Finalized)
     const existingSchedule = await TimetableSchedule.findOne({ department, academicYear, semesterType });
     if (existingSchedule && existingSchedule.isLocked) {
-      return res.status(400).json({ 
-        error: "Timetable is LOCKED (Finalized)! Please unlock it in the Admin Panel before generating a new schedule." 
+      return res.status(400).json({
+        error: "Timetable is LOCKED (Finalized)! Please unlock it in the Admin Panel before generating a new schedule."
       });
     }
 
@@ -1147,6 +1147,23 @@ router.post("/generate", async (req, res) => {
     };
 
     // Helper: How many periods on 'day' are already taken by block sessions (Lab, Project, Training)
+    const isBlockType = (type) => {
+      const t = (type || "").toLowerCase();
+      return t.includes("lab") || t.includes("project");
+    };
+
+    // Helper: Checks if subject is a physical laboratory (e.g. Computer/Hardware lab).
+    // Placement, Aptitude, Career Development Skills (CDS), and Training are classroom-based and NOT physical labs.
+    const isPhysicalLab = (item) => {
+      if (!item) return false;
+      const s = `${item.subjectCode || ""} ${item.subjectName || ""} ${item.shortName || ""} ${item.type || ""}`.toLowerCase();
+      if (s.includes("cds") || s.includes("aptitude") || s.includes("career") || s.includes("placement") || 
+          s.includes("soft skill") || s.includes("trainer") || s.includes("training") || s.includes("counsel") || s.includes("mentor")) {
+        return false;
+      }
+      return isBlockType(item.type);
+    };
+
     const getClassBlockCountOnDay = (ck, day) => {
       let count = 0;
       PERIODS.forEach(p => {
@@ -1162,7 +1179,7 @@ router.post("/generate", async (req, res) => {
     const hasLabOnDay = (classKey, day) => {
       return PERIODS.some(p => {
         const slot = classGrid[classKey][day][p];
-        return slot && isBlockType(slot.type);
+        return slot && isPhysicalLab(slot);
       });
     };
 
@@ -1173,7 +1190,7 @@ router.post("/generate", async (req, res) => {
         const ck = facultyBusy[facultyName][day][p];
         if (!ck) return false;
         const slot = classGrid[ck] && classGrid[ck][day] && classGrid[ck][day][p];
-        return slot && isBlockType(slot.type);
+        return slot && isPhysicalLab(slot);
       });
     };
 
@@ -1186,11 +1203,11 @@ router.post("/generate", async (req, res) => {
       const c = (item.subjectCode || "").toLowerCase();
 
       if (t.includes("lab") || t.includes("project") || t.includes("seminar") || t.includes("sem") ||
-          t.includes("lib") || t.includes("free") || t.includes("mentor") || t.includes("activity")) {
+        t.includes("lib") || t.includes("free") || t.includes("mentor") || t.includes("activity")) {
         return false;
       }
       if (n.includes("library") || n.includes("seminar") || n.includes("mentoring") ||
-          s.includes("lib") || s.includes("sem") || c.includes("lib") || c.includes("sem") || c === "free") {
+        s.includes("lib") || s.includes("sem") || c.includes("lib") || c.includes("sem") || c === "free") {
         return false;
       }
       return true;
@@ -1237,11 +1254,6 @@ router.post("/generate", async (req, res) => {
         { name: "Morning (2-4)", periods: [2, 3, 4] }
         // STRICT: [1, 2, 3] is 100% EXCLUDED from Lab candidates!
       ];
-    };
-
-    const isBlockType = (type) => {
-      const t = (type || "").toLowerCase();
-      return t.includes("lab") || t.includes("project");
     };
 
     const isTrainingSubject = (item) => {
@@ -1429,7 +1441,7 @@ router.post("/generate", async (req, res) => {
         }
         return true;
       });
-      
+
       classLabs.forEach(lab => {
         let placed = false;
         const facs = lab.facultyNames || [];
@@ -1477,7 +1489,7 @@ router.post("/generate", async (req, res) => {
             if (!classFree) continue;
 
             // Check if ALL assigned faculties are free for all periods (CRITICAL ZERO CLASH & FATIGUE PROTECTION!)
-            const allFacsFree = facs.every(f => 
+            const allFacsFree = facs.every(f =>
               block.periods.every(p => isFacultyFree(f, day, p)) &&
               !wouldCauseFacultyBlockFatigue(f, day, block.periods)
             );
@@ -1574,8 +1586,8 @@ router.post("/generate", async (req, res) => {
           for (let d = 0; d < candidateDays.length && !blockPlaced; d++) {
             const day = candidateDays[d];
 
-            // If item is a Lab / non-theory (e.g. CDS-III 2+1), enforce MAX 1 LAB PER CLASS & PER FACULTY PER DAY!
-            if ((isBlockType(item.type) || !isPureTheorySubject(item))) {
+            // If item is a Physical Lab, enforce MAX 1 LAB PER CLASS & PER FACULTY PER DAY!
+            if (isPhysicalLab(item)) {
               if (hasLabOnDay(ck, day)) continue;
               if (facs.some(f => doesFacultyHaveLabOnDay(f, day))) continue;
             }
@@ -1621,10 +1633,10 @@ router.post("/generate", async (req, res) => {
 
               // Class Morning vs Afternoon balance for continuous blocks:
               const isMorning = block.periods.some(p => p <= 4);
-              const classMorningBlocks = DAYS.filter(d => 
+              const classMorningBlocks = DAYS.filter(d =>
                 classGrid[ck][d] && (classGrid[ck][d][3]?.isTraining || classGrid[ck][d][4]?.isTraining)
               ).length;
-              const classAfternoonBlocks = DAYS.filter(d => 
+              const classAfternoonBlocks = DAYS.filter(d =>
                 classGrid[ck][d] && (classGrid[ck][d][5]?.isTraining || classGrid[ck][d][6]?.isTraining)
               ).length;
 
@@ -1667,7 +1679,7 @@ router.post("/generate", async (req, res) => {
               if (!classFree) continue;
 
               // Check if ALL assigned faculties are free for all periods and no fatigue (>2 continuous hours)
-              const allFacsFree = facs.every(f => 
+              const allFacsFree = facs.every(f =>
                 block.periods.every(p => isFacultyFree(f, day, p)) &&
                 !wouldCauseFacultyBlockFatigue(f, day, block.periods)
               );
@@ -1760,8 +1772,8 @@ router.post("/generate", async (req, res) => {
                 return;
               }
 
-              // 3. If subject is a Lab (e.g. single-hour remainder of CDS-III), enforce max 1 lab per day & no Period 1!
-              if (isBlockType(subj.type)) {
+              // 3. If subject is a Physical Lab, enforce max 1 lab per day & no Period 1!
+              if (isPhysicalLab(subj)) {
                 if (hasLabOnDay(ck, day)) return;
                 if (p === 1) return;
               }
@@ -1844,7 +1856,7 @@ router.post("/generate", async (req, res) => {
               }
 
               // 🎯 Rule 5: HARD BAN ON SAME THEORY SUBJECT OCCURRING TWICE ON THE SAME DAY!
-              const classHoursOfThisSubjToday = PERIODS.filter(pr => 
+              const classHoursOfThisSubjToday = PERIODS.filter(pr =>
                 classGrid[ck][day][pr] && classGrid[ck][day][pr].subjectCode === subj.subjectCode
               ).length;
               if (classHoursOfThisSubjToday >= 1) {
@@ -1952,27 +1964,115 @@ router.post("/generate", async (req, res) => {
       });
     });
 
-    // --- STEP C: FILL REMAINING EMPTY PERIODS AS FREE / SELF STUDY ---
-    // STRICT USER REQUIREMENT:
-    // If the admin allocated 1 hour for LIB, LIB must appear EXACTLY 1 time! Never duplicate extra fake LIBs!
-    // If the admin allocated 1 hour for SEM, SEM must appear EXACTLY 1 time!
-    // Remaining unallocated periods are purely FREE / Self Study hours.
+    // --- STEP C: AUTO-FILL REMAINING EMPTY PERIODS (GUARANTEE 100% FULL 35-PERIOD TIMETABLE) ---
+    // User Requirement: ZERO "FREE" periods! Every period across all 5 days is productively scheduled.
+    // 1. First priority: Allocate Core Theory Revision / Tutorial hours for analytical & core subjects (e.g. PAS, DAA, FDS, WD)
+    //    Strictly verifying ZERO faculty clash, ZERO fatigue, and avoiding consecutive repeats.
+    // 2. Second priority: If no core theory faculty is free, assign Library, Seminar, or Mentoring Hour.
     classKeys.forEach(ck => {
+      const clsAllocations = classGroups[ck].allocations || [];
+      const coreTheory = clsAllocations.filter(a => isPureTheorySubject(a));
+      // Prioritize Maths / Analytical subjects (PAS, DAA, FDS)
+      const sortedTheory = [...coreTheory].sort((a, b) => {
+        const isToughA = isMathsOrToughSubject(a) ? 1 : 0;
+        const isToughB = isMathsOrToughSubject(b) ? 1 : 0;
+        return isToughB - isToughA;
+      });
+
       DAYS.forEach(day => {
         PERIODS.forEach(p => {
-          if (classGrid[ck][day][p] === null) {
+          if (classGrid[ck][day][p] !== null) return;
+
+          let filled = false;
+
+          // 1. Try Core Theory Tutorial / Revision
+          for (const cand of sortedTheory) {
+            const fac = (cand.facultyNames && cand.facultyNames.length > 0) ? cand.facultyNames[0] : "";
+
+            // Check faculty availability (CRITICAL ZERO CLASH!)
+            if (fac && !isFacultyFree(fac, day, p)) continue;
+            if (fac && causesFacultyContinuousFatigue(fac, day, p)) continue;
+
+            // Maths/Tough subjects strictly avoid Period 7
+            if (p === 7 && isMathsOrToughSubject(cand)) continue;
+
+            // Avoid same subject back-to-back in consecutive periods
+            const leftSlot = p > 1 ? classGrid[ck][day][p - 1] : null;
+            const rightSlot = p < 7 ? classGrid[ck][day][p + 1] : null;
+            if ((leftSlot && leftSlot.subjectCode === cand.subjectCode) || (rightSlot && rightSlot.subjectCode === cand.subjectCode)) {
+              continue;
+            }
+
+            // Do not repeat if subject already has >= 2 hours today
+            const timesToday = PERIODS.filter(pr => classGrid[ck][day][pr]?.subjectCode === cand.subjectCode).length;
+            if (timesToday >= 2) continue;
+
+            // Place as Core Theory Tutorial / Class hour!
             classGrid[ck][day][p] = {
               period: p,
               time: timings[p] || DEFAULT_TIMINGS[p],
-              subjectCode: "FREE",
-              subjectName: "Free Period / Self Study",
-              shortName: "FREE",
-              facultyName: "-",
-              facultyNames: [],
-              type: "Free",
-              difficulty: "Light",
-              room: "-"
+              subjectCode: cand.subjectCode,
+              subjectName: cand.subjectName,
+              shortName: cand.shortName || cand.subjectCode,
+              facultyName: fac || "-",
+              facultyNames: fac ? [fac] : [],
+              type: "Theory",
+              difficulty: cand.difficulty || "Normal",
+              room: "LH-1"
             };
+            if (fac) markFacultyBusy(fac, day, p, ck);
+            filled = true;
+            break;
+          }
+
+          // 2. If no core theory faculty was free, assign Library, Seminar, or Mentoring Hour
+          if (!filled) {
+            const libItem = clsAllocations.find(a => (a.type || "").toLowerCase().includes("lib") || (a.subjectName || "").toLowerCase().includes("lib") || (a.shortName || "").toLowerCase().includes("lib"));
+            const semItem = clsAllocations.find(a => (a.type || "").toLowerCase().includes("sem") || (a.subjectName || "").toLowerCase().includes("sem") || (a.shortName || "").toLowerCase().includes("sem"));
+
+            const hasLibToday = PERIODS.some(pr => classGrid[ck][day][pr]?.type === "Library" || classGrid[ck][day][pr]?.shortName === "LIB");
+            const hasSemToday = PERIODS.some(pr => classGrid[ck][day][pr]?.type === "Seminar" || classGrid[ck][day][pr]?.shortName === "SEM");
+
+            if (!hasLibToday && libItem) {
+              classGrid[ck][day][p] = {
+                period: p,
+                time: timings[p] || DEFAULT_TIMINGS[p],
+                subjectCode: libItem.subjectCode || "LIB",
+                subjectName: libItem.subjectName || "Library / Digital Library",
+                shortName: libItem.shortName || "LIB",
+                facultyName: "-",
+                facultyNames: [],
+                type: "Library",
+                difficulty: "Light",
+                room: "Library"
+              };
+            } else if (!hasSemToday && semItem) {
+              classGrid[ck][day][p] = {
+                period: p,
+                time: timings[p] || DEFAULT_TIMINGS[p],
+                subjectCode: semItem.subjectCode || "SEM",
+                subjectName: semItem.subjectName || "Seminar / Technical Presentation",
+                shortName: semItem.shortName || "SEM",
+                facultyName: "-",
+                facultyNames: [],
+                type: "Seminar",
+                difficulty: "Light",
+                room: "Seminar Hall"
+              };
+            } else {
+              classGrid[ck][day][p] = {
+                period: p,
+                time: timings[p] || DEFAULT_TIMINGS[p],
+                subjectCode: "MENTOR",
+                subjectName: "Mentoring & Student Counseling",
+                shortName: "MENTOR",
+                facultyName: "-",
+                facultyNames: [],
+                type: "Mentoring",
+                difficulty: "Light",
+                room: "LH-1"
+              };
+            }
           }
         });
       });
@@ -2102,12 +2202,285 @@ router.post("/generate", async (req, res) => {
   }
 });
 
-// GET saved timetable schedule
+// Helper: Rebuild faculty schedules across all staff members from classes in doc
+const buildFacultySchedules = async (doc, department) => {
+  const allStaffMembers = await Staff.find({ department: department || doc.department || "CSE" });
+  const facultySchedules = {};
+  allStaffMembers.forEach(s => {
+    facultySchedules[s.name] = {
+      name: s.name,
+      designation: s.designation,
+      theoryCount: 0,
+      labCount: 0,
+      totalHours: 0,
+      days: { Monday: [], Tuesday: [], Wednesday: [], Thursday: [], Friday: [] }
+    };
+    DAYS.forEach(d => {
+      facultySchedules[s.name].days[d] = PERIODS.map(p => ({
+        period: p,
+        time: DEFAULT_TIMINGS[p],
+        occupied: false,
+        classKey: "",
+        subjectName: "",
+        type: "Free"
+      }));
+    });
+  });
+
+  (doc.classes || []).forEach(cItem => {
+    DAYS.forEach(d => {
+      (cItem.days[d] || []).forEach(slot => {
+        if (!slot || slot.type === "Free" || slot.subjectCode === "FREE") return;
+        const facList = slot.facultyNames && slot.facultyNames.length > 0 ? slot.facultyNames : (slot.facultyName ? [slot.facultyName] : []);
+        facList.forEach(fac => {
+          const cleanFac = String(fac || "").trim();
+          if (!cleanFac || cleanFac === "-") return;
+          let targetKey = cleanFac;
+          if (!facultySchedules[targetKey]) {
+            const matchedKey = Object.keys(facultySchedules).find(k => isSameFacultyName(k, cleanFac));
+            if (matchedKey) targetKey = matchedKey;
+          }
+          if (facultySchedules[targetKey]) {
+            const periodIdx = slot.period - 1;
+            if (facultySchedules[targetKey].days[d] && facultySchedules[targetKey].days[d][periodIdx]) {
+              facultySchedules[targetKey].days[d][periodIdx] = {
+                period: slot.period,
+                time: slot.time,
+                occupied: true,
+                classKey: cItem.classKey,
+                subjectName: slot.subjectName,
+                shortName: slot.shortName,
+                type: slot.type
+              };
+              facultySchedules[targetKey].totalHours++;
+              if (slot.type === "Laboratory" || slot.type === "Lab") facultySchedules[targetKey].labCount = (facultySchedules[targetKey].labCount || 0) + 1;
+              else facultySchedules[targetKey].theoryCount = (facultySchedules[targetKey].theoryCount || 0) + 1;
+            }
+          }
+        });
+      });
+    });
+  });
+
+  return facultySchedules;
+};
+
+// Helper: Auto-fills any remaining FREE slots in an existing saved schedule
+const healScheduleFreeSlots = async (schedule, department) => {
+  if (!schedule || !schedule.classes || schedule.classes.length === 0 || schedule.isLocked) {
+    return false;
+  }
+
+  let hasFree = false;
+  schedule.classes.forEach(cls => {
+    DAYS.forEach(day => {
+      const slots = cls.days?.[day] || [];
+      slots.forEach(s => {
+        if (!s || s.type === "Free" || s.subjectCode === "FREE" || s.shortName === "FREE") {
+          hasFree = true;
+        }
+      });
+    });
+  });
+
+  if (!hasFree) return false;
+
+  // Build current busy faculty matrix across all classes
+  const busyFac = {};
+  DAYS.forEach(d => {
+    busyFac[d] = {};
+    PERIODS.forEach(p => {
+      busyFac[d][p] = new Set();
+    });
+  });
+
+  schedule.classes.forEach(cls => {
+    DAYS.forEach(day => {
+      const slots = cls.days?.[day] || [];
+      slots.forEach(s => {
+        if (s && s.type !== "Free" && s.subjectCode !== "FREE" && s.shortName !== "FREE") {
+          const facs = s.facultyNames || (s.facultyName ? [s.facultyName] : []);
+          facs.forEach(f => {
+            const clean = (f || "").trim();
+            if (clean && clean !== "-") {
+              busyFac[day][s.period]?.add(clean.toLowerCase());
+            }
+          });
+        }
+      });
+    });
+  });
+
+  // Load allocations to find valid subjects for each class
+  const allocDoc = await TimetableAllocation.findOne({
+    department: department || schedule.department || "CSE",
+    academicYear: schedule.academicYear || "2026-2027",
+    semesterType: schedule.semesterType || "Even"
+  });
+  const allAllocations = allocDoc?.allocations || [];
+
+  schedule.classes.forEach(cls => {
+    const classAllocs = allAllocations.filter(a => {
+      const yrMatch = String(a.year).toLowerCase().includes(String(cls.year).toLowerCase()) ||
+                      String(cls.year).toLowerCase().includes(String(a.year).toLowerCase());
+      const secMatch = !a.section || a.section === "All" || a.section === cls.section;
+      return yrMatch && secMatch;
+    });
+
+    const existingSubjs = [];
+    DAYS.forEach(d => {
+      (cls.days?.[d] || []).forEach(s => {
+        if (s && s.subjectCode && s.subjectCode !== "FREE" && s.type !== "Free") {
+          if (!existingSubjs.some(x => x.subjectCode === s.subjectCode)) {
+            existingSubjs.push(s);
+          }
+        }
+      });
+    });
+
+    const candidatePool = classAllocs.length > 0 ? classAllocs : existingSubjs;
+
+    DAYS.forEach(day => {
+      const slots = cls.days?.[day] || [];
+      slots.forEach((s, idx) => {
+        if (!s || s.type === "Free" || s.subjectCode === "FREE" || s.shortName === "FREE") {
+          const p = s?.period || (idx + 1);
+
+          let chosen = null;
+
+          // 1. Try to find a Theory subject whose faculty is free
+          for (const cand of candidatePool) {
+            const t = (cand.type || "").toLowerCase();
+            if (t.includes("lab") || t.includes("project")) continue;
+
+            const facs = cand.facultyNames || (cand.facultyName ? [cand.facultyName] : []);
+            const fac = facs[0] || "";
+
+            if (fac && fac !== "-") {
+              if (busyFac[day][p]?.has(fac.toLowerCase())) continue;
+            }
+
+            // Avoid same subject in adjacent period
+            const left = slots.find(x => x.period === p - 1);
+            const right = slots.find(x => x.period === p + 1);
+            if ((left && left.subjectCode === (cand.subjectCode || cand.code)) || 
+                (right && right.subjectCode === (cand.subjectCode || cand.code))) {
+              continue;
+            }
+
+            // Avoid math in period 7
+            const isMath = /math|probability|statistics|calculus|discrete|pas/i.test(`${cand.subjectName || cand.name || ""} ${cand.shortName || ""} ${cand.subjectCode || cand.code || ""}`);
+            if (p === 7 && isMath) continue;
+
+            chosen = {
+              period: p,
+              time: s?.time || DEFAULT_TIMINGS[p],
+              subjectCode: cand.subjectCode || cand.code,
+              subjectName: cand.subjectName || cand.name,
+              shortName: cand.shortName || cand.subjectCode || cand.code,
+              facultyName: fac || "-",
+              facultyNames: fac ? [fac] : [],
+              type: cand.type || "Theory",
+              difficulty: cand.difficulty || "Normal",
+              room: cand.type === "Library" ? "Library" : (cand.type === "Seminar" ? "Seminar Hall" : "LH-1")
+            };
+            if (fac && fac !== "-") {
+              busyFac[day][p]?.add(fac.toLowerCase());
+            }
+            break;
+          }
+
+          // 2. Fallback to Seminar, Library, or Mentoring
+          if (!chosen) {
+            const hasLib = slots.some(x => x.type === "Library" || x.shortName === "LIB");
+            const hasSem = slots.some(x => x.type === "Seminar" || x.shortName === "SEM");
+
+            if (!hasSem) {
+              chosen = {
+                period: p,
+                time: s?.time || DEFAULT_TIMINGS[p],
+                subjectCode: "SEM",
+                subjectName: "Seminar / Technical Presentation",
+                shortName: "SEM",
+                facultyName: "-",
+                facultyNames: [],
+                type: "Seminar",
+                difficulty: "Light",
+                room: "Seminar Hall"
+              };
+            } else if (!hasLib) {
+              chosen = {
+                period: p,
+                time: s?.time || DEFAULT_TIMINGS[p],
+                subjectCode: "LIB",
+                subjectName: "Library / Digital Library",
+                shortName: "LIB",
+                facultyName: "-",
+                facultyNames: [],
+                type: "Library",
+                difficulty: "Light",
+                room: "Library"
+              };
+            } else {
+              chosen = {
+                period: p,
+                time: s?.time || DEFAULT_TIMINGS[p],
+                subjectCode: "MENTOR",
+                subjectName: "Mentoring & Student Counseling",
+                shortName: "MENTOR",
+                facultyName: "-",
+                facultyNames: [],
+                type: "Mentoring",
+                difficulty: "Light",
+                room: "LH-1"
+              };
+            }
+          }
+
+          slots[idx] = chosen;
+        }
+      });
+    });
+  });
+
+  return true;
+};
+
+// GET saved timetable schedule (automatically heals & fills FREE slots)
 router.get("/schedule", async (req, res) => {
   try {
     const { department = "CSE", academicYear = "2026-2027", semesterType = "Odd" } = req.query;
-    const schedule = await TimetableSchedule.findOne({ department, academicYear, semesterType });
+    let schedule = await TimetableSchedule.findOne({ department, academicYear, semesterType });
+    if (schedule && !schedule.isLocked) {
+      const healed = await healScheduleFreeSlots(schedule, department);
+      if (healed) {
+        schedule.facultySchedules = await buildFacultySchedules(schedule, department);
+        schedule.markModified("classes");
+        schedule.markModified("facultySchedules");
+        await schedule.save();
+      }
+    }
     res.json(schedule || null);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Explicit Auto-Fill Free Slots Endpoint
+router.post("/schedule/fill-free", async (req, res) => {
+  try {
+    const { department = "CSE", academicYear = "2026-2027", semesterType = "Odd" } = req.body;
+    let schedule = await TimetableSchedule.findOne({ department, academicYear, semesterType });
+    if (!schedule) return res.status(404).json({ error: "Schedule not found" });
+
+    const healed = await healScheduleFreeSlots(schedule, department);
+    if (healed) {
+      schedule.facultySchedules = await buildFacultySchedules(schedule, department);
+      schedule.markModified("classes");
+      schedule.markModified("facultySchedules");
+      await schedule.save();
+    }
+    res.json({ success: true, message: "All Free periods successfully filled with conflict-free subjects!", schedule });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2132,65 +2505,10 @@ router.put("/schedule/cell", async (req, res) => {
     if (pIdx !== -1) {
       cls.days[day][pIdx] = { ...cls.days[day][pIdx], ...updatedSlot };
       doc.markModified("classes");
+      const facultySchedules = await buildFacultySchedules(doc, department);
+      doc.facultySchedules = facultySchedules;
+      doc.markModified("facultySchedules");
       await doc.save();
-
-      // Recalculate facultySchedules
-      const allStaffMembers = await Staff.find({ department });
-      const facultySchedules = {};
-      allStaffMembers.forEach(s => {
-        facultySchedules[s.name] = {
-          name: s.name,
-          designation: s.designation,
-          theoryCount: 0,
-          labCount: 0,
-          totalHours: 0,
-          days: { Monday: [], Tuesday: [], Wednesday: [], Thursday: [], Friday: [] }
-        };
-        DAYS.forEach(d => {
-          facultySchedules[s.name].days[d] = PERIODS.map(p => ({
-            period: p,
-            time: DEFAULT_TIMINGS[p],
-            occupied: false,
-            classKey: "",
-            subjectName: "",
-            type: "Free"
-          }));
-        });
-      });
-
-      doc.classes.forEach(cItem => {
-        DAYS.forEach(d => {
-          (cItem.days[d] || []).forEach(slot => {
-            if (slot.type === "Free") return;
-            const facList = slot.facultyNames && slot.facultyNames.length > 0 ? slot.facultyNames : (slot.facultyName ? [slot.facultyName] : []);
-            facList.forEach(fac => {
-              const cleanFac = String(fac || "").trim();
-              let targetKey = cleanFac;
-              if (!facultySchedules[targetKey]) {
-                const matchedKey = Object.keys(facultySchedules).find(k => isSameFacultyName(k, cleanFac));
-                if (matchedKey) targetKey = matchedKey;
-              }
-              if (facultySchedules[targetKey]) {
-                const periodIdx = slot.period - 1;
-                if (facultySchedules[targetKey].days[d] && facultySchedules[targetKey].days[d][periodIdx]) {
-                  facultySchedules[targetKey].days[d][periodIdx] = {
-                    period: slot.period,
-                    time: slot.time,
-                    occupied: true,
-                    classKey: cItem.classKey,
-                    subjectName: slot.subjectName,
-                    shortName: slot.shortName,
-                    type: slot.type
-                  };
-                  facultySchedules[targetKey].totalHours++;
-                  if (slot.type === "Laboratory") facultySchedules[targetKey].labCount = (facultySchedules[targetKey].labCount || 0) + 1;
-                  else facultySchedules[targetKey].theoryCount = (facultySchedules[targetKey].theoryCount || 0) + 1;
-                }
-              }
-            });
-          });
-        });
-      });
 
       return res.json({ success: true, schedule: doc, facultySchedules, message: "Slot updated successfully!" });
     }
@@ -2263,9 +2581,9 @@ router.post("/schedule/sync-faculty", async (req, res) => {
           const codeUpper = (slot.subjectCode || "").trim().toUpperCase();
           const shortUpper = (slot.shortName || "").trim().toUpperCase();
           const matchedFacs = allocMap[`${cls.year}-${cls.section}-${codeUpper}`] ||
-                             allocMap[`${cls.year}-${cls.section}-${shortUpper}`] ||
-                             allocMap[`${cls.year}-${codeUpper}`] ||
-                             allocMap[`${cls.year}-${shortUpper}`];
+            allocMap[`${cls.year}-${cls.section}-${shortUpper}`] ||
+            allocMap[`${cls.year}-${codeUpper}`] ||
+            allocMap[`${cls.year}-${shortUpper}`];
 
           if (matchedFacs && matchedFacs.length > 0) {
             const newFacStr = matchedFacs.join(", ");
@@ -2391,10 +2709,10 @@ router.put("/lock", async (req, res) => {
     const { department = "CSE", academicYear = "2026-2027", semesterType = "Odd", isLocked, lockedBy } = req.body;
     const doc = await TimetableSchedule.findOneAndUpdate(
       { department, academicYear, semesterType },
-      { 
-        isLocked: Boolean(isLocked), 
-        lockedBy: lockedBy || "Admin", 
-        lockedAt: isLocked ? new Date() : null 
+      {
+        isLocked: Boolean(isLocked),
+        lockedBy: lockedBy || "Admin",
+        lockedAt: isLocked ? new Date() : null
       },
       { new: true }
     );
@@ -2468,10 +2786,10 @@ router.post("/history/restore/:id", async (req, res) => {
       { upsert: true, new: true }
     );
 
-    res.json({ 
-      success: true, 
-      message: `Restored ${histDoc.versionName || "Historical Version"} Successfully!`, 
-      schedule: updatedSchedule 
+    res.json({
+      success: true,
+      message: `Restored ${histDoc.versionName || "Historical Version"} Successfully!`,
+      schedule: updatedSchedule
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2521,11 +2839,11 @@ router.put("/timings", async (req, res) => {
       await schedule.save();
     }
 
-    res.json({ 
-      success: true, 
-      message: "Admin period timings saved and applied across all classes and schedules!", 
+    res.json({
+      success: true,
+      message: "Admin period timings saved and applied across all classes and schedules!",
       timings,
-      schedule 
+      schedule
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
