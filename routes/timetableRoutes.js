@@ -112,6 +112,23 @@ const isSameFacultyName = (nameA, nameB) => {
   return false;
 };
 
+// Normalizes year representations ("2", "II", "II Year" -> "II", "3", "III", "III Year" -> "III", "4", "IV", "IV Year" -> "IV")
+const normalizeYear = (yr) => {
+  if (!yr) return "";
+  const s = String(yr).trim().toUpperCase();
+  if (s === "4" || s === "IV" || s.startsWith("IV") || s.includes("FINAL")) return "IV";
+  if (s === "3" || s === "III" || s.startsWith("III") || s.includes("THIRD")) return "III";
+  if (s === "2" || s === "II" || s.startsWith("II") || s.includes("SECOND")) return "II";
+  if (s === "1" || s === "I" || s.startsWith("I") || s.includes("FIRST")) return "I";
+  return s;
+};
+
+// Strict year equality check to prevent "III".includes("II") substring false matches!
+const isSameYear = (yrA, yrB) => {
+  if (!yrA || !yrB) return false;
+  return normalizeYear(yrA) === normalizeYear(yrB);
+};
+
 // CASCADE helper: automatically updates allocations, schedule slots, and faculty routines everywhere
 async function cascadeFacultyNameChange(oldName, newName, department = "CSE") {
   if (!oldName || !newName) {
@@ -2413,8 +2430,7 @@ const sanitizeExcessSubjectHours = async (schedule, department) => {
 
   schedule.classes.forEach(cls => {
     const classAllocs = allAllocations.filter(a => {
-      const yrMatch = String(a.year).toLowerCase().includes(String(cls.year).toLowerCase()) ||
-                      String(cls.year).toLowerCase().includes(String(a.year).toLowerCase());
+      const yrMatch = isSameYear(a.year, cls.year);
       const secMatch = !a.section || a.section === "All" || a.section === cls.section;
       return yrMatch && secMatch;
     });
@@ -2554,8 +2570,7 @@ const healScheduleFreeSlots = async (schedule, department) => {
 
   schedule.classes.forEach(cls => {
     const classAllocs = allAllocations.filter(a => {
-      const yrMatch = String(a.year).toLowerCase().includes(String(cls.year).toLowerCase()) ||
-                      String(cls.year).toLowerCase().includes(String(a.year).toLowerCase());
+      const yrMatch = isSameYear(a.year, cls.year);
       const secMatch = !a.section || a.section === "All" || a.section === cls.section;
       return yrMatch && secMatch;
     });
