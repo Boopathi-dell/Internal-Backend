@@ -1040,6 +1040,66 @@ router.post("/generate", async (req, res) => {
       return !facultyBusy[facultyName][day][period];
     };
 
+    // Helper: Count how many times a subject has been placed in classGrid[ck]
+    const getSubjectPlacedCountInClass = (ck, subjectCode) => {
+      let count = 0;
+      DAYS.forEach(d => {
+        PERIODS.forEach(p => {
+          if (classGrid[ck]?.[d]?.[p]?.subjectCode === subjectCode) {
+            count++;
+          }
+        });
+      });
+      return count;
+    };
+
+    // Helper: Total allocated hours per faculty across all allocations
+    const facultyMaxWorkloadMap = {};
+    allocations.forEach(a => {
+      const h = Number(a.hoursPerWeek) || 0;
+      (a.facultyNames || []).forEach(f => {
+        if (!f || f === "-") return;
+        const existingKey = Object.keys(facultyMaxWorkloadMap).find(k => isSameFacultyName(k, f));
+        const targetKey = existingKey || f;
+        facultyMaxWorkloadMap[targetKey] = (facultyMaxWorkloadMap[targetKey] || 0) + h;
+      });
+    });
+
+    // Helper: Count total scheduled teaching hours for a faculty across all classes
+    const getFacultyTotalScheduledHours = (facName) => {
+      if (!facName || facName === "-") return 0;
+      let count = 0;
+      classKeys.forEach(ck => {
+        DAYS.forEach(d => {
+          PERIODS.forEach(p => {
+            const slot = classGrid[ck]?.[d]?.[p];
+            if (slot && slot.facultyNames && slot.facultyNames.some(fn => isSameFacultyName(fn, facName))) {
+              count++;
+            }
+          });
+        });
+      });
+      return count;
+    };
+
+    // Helper: Check if faculty can take more teaching hours (cannot exceed allocated hours!)
+    const canFacultyTakeMoreHours = (facName) => {
+      if (!facName || facName === "-") return true;
+      const matchedKey = Object.keys(facultyMaxWorkloadMap).find(k => isSameFacultyName(k, facName));
+      if (!matchedKey) return true;
+      const maxAllowed = facultyMaxWorkloadMap[matchedKey];
+      const scheduled = getFacultyTotalScheduledHours(facName);
+      return scheduled < maxAllowed;
+    };
+
+    // Helper: Check if a subject can take more hours in a class (cannot exceed hoursPerWeek!)
+    const canSubjectTakeMoreHoursInClass = (ck, allocItem) => {
+      if (!allocItem || !allocItem.subjectCode) return false;
+      const maxNeeded = Number(allocItem.hoursPerWeek) || 4;
+      const placed = getSubjectPlacedCountInClass(ck, allocItem.subjectCode);
+      return placed < maxNeeded;
+    };
+
     // Helper: Daily teaching hours for faculty on day
     const getFacultyDailyHours = (facultyName, day) => {
       if (!facultyName || !facultyBusy[facultyName] || !facultyBusy[facultyName][day]) return 0;
@@ -1973,6 +2033,13 @@ router.post("/generate", async (req, res) => {
           const theoryCandidates = classGroups[ck].allocations.filter(a => isPureTheorySubject(a));
           for (const cand of theoryCandidates) {
             const fac = cand.facultyNames && cand.facultyNames.length > 0 ? cand.facultyNames[0] : "";
+            
+            // 🛑 STRICT QUOTA CHECK: Subject must NOT exceed its hoursPerWeek
+            if (!canSubjectTakeMoreHoursInClass(ck, cand)) continue;
+
+            // 🛑 STRICT QUOTA CHECK: Faculty must NOT exceed their allocated workload
+            if (fac && !canFacultyTakeMoreHours(fac)) continue;
+
             if (fac && !isFacultyFree(fac, day, 1)) continue;
             if (fac && causesFacultyContinuousFatigue(fac, day, 1)) continue;
 
@@ -1984,7 +2051,7 @@ router.post("/generate", async (req, res) => {
               shortName: cand.shortName || cand.subjectCode,
               facultyName: fac,
               facultyNames: fac ? [fac] : [],
-              type: "Theory",
+              type: cand.type || "Theory",
               difficulty: cand.difficulty || "Normal",
               room: "LH-1"
             };
@@ -1997,9 +2064,10 @@ router.post("/generate", async (req, res) => {
 
     // --- STEP C: AUTO-FILL REMAINING EMPTY PERIODS (GUARANTEE 100% FULL 35-PERIOD TIMETABLE) ---
     // User Requirement: ZERO "FREE" periods! Every period across all 5 days is productively scheduled.
-    // 1. First priority: Allocate Core Theory Revision / Tutorial hours for analytical & core subjects (e.g. PAS, DAA, FDS, WD)
+    // 1. First priority: Check if any allocated Core Theory still has remaining unplaced hours (e.g. from clashes in Step B)
     //    Strictly verifying ZERO faculty clash, ZERO fatigue, and avoiding consecutive repeats.
-    // 2. Second priority: If no core theory faculty is free, assign Library, Seminar, or Mentoring Hour.
+    //    NEVER exceed a subject's hoursPerWeek or a faculty's allocated workload!
+    // 2. Second priority: If all subjects have completed their quota, assign Library, Seminar, or Mentoring Hour.
     classKeys.forEach(ck => {
       const clsAllocations = classGroups[ck].allocations || [];
       const coreTheory = clsAllocations.filter(a => isPureTheorySubject(a));
@@ -2016,9 +2084,17 @@ router.post("/generate", async (req, res) => {
 
           let filled = false;
 
-          // 1. Try Core Theory Tutorial / Revision
+          // 1. Try Core Theory Tutorial / Revision ONLY IF subject still has remaining unplaced quota AND faculty has remaining hours!
           for (const cand of sortedTheory) {
             const fac = (cand.facultyNames && cand.facultyNames.length > 0) ? cand.facultyNames[0] : "";
+
+            // 🛑 STRICT QUOTA CHECK: Subject must NOT exceed its hoursPerWeek!
+            // (e.g. DAA 4h must NEVER be placed 5 or 6 times!)
+            if (!canSubjectTakeMoreHoursInClass(ck, cand)) continue;
+
+            // 🛑 STRICT QUOTA CHECK: Faculty must NOT exceed their allocated workload!
+            // (e.g. Dr. G. Kavitha 4h must NEVER teach 5 or 6 hours!)
+            if (fac && !canFacultyTakeMoreHours(fac)) continue;
 
             // Check faculty availability (CRITICAL ZERO CLASH!)
             if (fac && !isFacultyFree(fac, day, p)) continue;
@@ -2038,7 +2114,7 @@ router.post("/generate", async (req, res) => {
             const timesToday = PERIODS.filter(pr => classGrid[ck][day][pr]?.subjectCode === cand.subjectCode).length;
             if (timesToday >= 2) continue;
 
-            // Place as Core Theory Tutorial / Class hour!
+            // Place as Theory
             classGrid[ck][day][p] = {
               period: p,
               time: timings[p] || DEFAULT_TIMINGS[p],
@@ -2047,7 +2123,7 @@ router.post("/generate", async (req, res) => {
               shortName: cand.shortName || cand.subjectCode,
               facultyName: fac || "-",
               facultyNames: fac ? [fac] : [],
-              type: "Theory",
+              type: cand.type || "Theory",
               difficulty: cand.difficulty || "Normal",
               room: "LH-1"
             };
@@ -2296,6 +2372,110 @@ const buildFacultySchedules = async (doc, department) => {
   return facultySchedules;
 };
 
+// Helper: Prunes and fixes any subjects that were assigned more hours than their allocated hoursPerWeek
+// (e.g. if DAA 4h was accidentally given 6 periods, trims the 2 extra single periods back to 4h!)
+const sanitizeExcessSubjectHours = async (schedule, department) => {
+  if (!schedule || !schedule.classes || schedule.classes.length === 0 || schedule.isLocked) {
+    return false;
+  }
+
+  const allocDoc = await TimetableAllocation.findOne({
+    department: department || schedule.department || "CSE",
+    academicYear: schedule.academicYear || "2026-2027",
+    semesterType: schedule.semesterType || "Even"
+  });
+  const allAllocations = allocDoc?.allocations || [];
+  if (allAllocations.length === 0) return false;
+
+  let modified = false;
+
+  schedule.classes.forEach(cls => {
+    const classAllocs = allAllocations.filter(a => {
+      const yrMatch = String(a.year).toLowerCase().includes(String(cls.year).toLowerCase()) ||
+                      String(cls.year).toLowerCase().includes(String(a.year).toLowerCase());
+      const secMatch = !a.section || a.section === "All" || a.section === cls.section;
+      return yrMatch && secMatch;
+    });
+
+    classAllocs.forEach(allocItem => {
+      const subjCode = allocItem.subjectCode || allocItem.code;
+      if (!subjCode || subjCode === "FREE" || subjCode === "LIB" || subjCode === "SEM" || subjCode === "MENTOR") {
+        return;
+      }
+
+      const maxAllowed = Number(allocItem.hoursPerWeek) || 4;
+
+      // Find all slots with this subject in the class
+      const placedSlots = [];
+      DAYS.forEach(day => {
+        const dayArr = cls.days?.[day] || [];
+        dayArr.forEach(slot => {
+          if (slot && (slot.subjectCode === subjCode || slot.shortName === (allocItem.shortName || subjCode))) {
+            placedSlots.push({ day, period: slot.period, slot });
+          }
+        });
+      });
+
+      if (placedSlots.length > maxAllowed) {
+        let excessCount = placedSlots.length - maxAllowed;
+
+        // Pruning priority:
+        // 1. First remove single Theory slots (type !== "Training" and not a lab block)
+        // 2. Keep the core multi-period blocks intact!
+        const singleSlots = placedSlots.filter(p => !p.slot.isTraining && !isBlockType(p.slot.type) && (p.slot.type || "").toLowerCase() === "theory");
+        const candidatesToRemove = singleSlots.length >= excessCount ? singleSlots : placedSlots;
+
+        // Remove from the end
+        for (let i = candidatesToRemove.length - 1; i >= 0 && excessCount > 0; i--) {
+          const item = candidatesToRemove[i];
+          const dayArr = cls.days?.[item.day] || [];
+          const slotIdx = dayArr.findIndex(s => s.period === item.period);
+
+          if (slotIdx !== -1) {
+            const hasLibToday = dayArr.some(s => s.type === "Library" || s.shortName === "LIB");
+            const hasSemToday = dayArr.some(s => s.type === "Seminar" || s.shortName === "SEM");
+
+            let replacementType = "Mentoring";
+            let replacementCode = "MENTOR";
+            let replacementName = "Mentoring & Student Counseling";
+            let replacementRoom = "LH-1";
+
+            if (!hasSemToday) {
+              replacementType = "Seminar";
+              replacementCode = "SEM";
+              replacementName = "Seminar / Technical Presentation";
+              replacementRoom = "Seminar Hall";
+            } else if (!hasLibToday) {
+              replacementType = "Library";
+              replacementCode = "LIB";
+              replacementName = "Library / Digital Library";
+              replacementRoom = "Library";
+            }
+
+            dayArr[slotIdx] = {
+              period: item.period,
+              time: item.slot.time || DEFAULT_TIMINGS[item.period],
+              subjectCode: replacementCode,
+              subjectName: replacementName,
+              shortName: replacementCode,
+              facultyName: "-",
+              facultyNames: [],
+              type: replacementType,
+              difficulty: "Light",
+              room: replacementRoom
+            };
+
+            modified = true;
+            excessCount--;
+          }
+        }
+      }
+    });
+  });
+
+  return modified;
+};
+
 // Helper: Auto-fills any remaining FREE slots in an existing saved schedule
 const healScheduleFreeSlots = async (schedule, department) => {
   if (!schedule || !schedule.classes || schedule.classes.length === 0 || schedule.isLocked) {
@@ -2379,15 +2559,50 @@ const healScheduleFreeSlots = async (schedule, department) => {
 
           let chosen = null;
 
-          // 1. Try to find a Theory subject whose faculty is free
+          // 1. Try to find a Theory subject whose faculty is free AND has not reached weekly quota
           for (const cand of candidatePool) {
             const t = (cand.type || "").toLowerCase();
             if (t.includes("lab") || t.includes("project")) continue;
+
+            const subjCode = cand.subjectCode || cand.code;
+            const maxNeeded = Number(cand.hoursPerWeek) || 4;
+
+            // 🛑 STRICT QUOTA: Count how many times cand is already in cls (e.g. DAA 4h must not be placed 5 or 6 times!)
+            let placedInClass = 0;
+            DAYS.forEach(d => {
+              (cls.days?.[d] || []).forEach(slotItem => {
+                if (slotItem && (slotItem.subjectCode === subjCode || slotItem.shortName === (cand.shortName || subjCode))) {
+                  placedInClass++;
+                }
+              });
+            });
+            if (placedInClass >= maxNeeded) continue;
 
             const facs = cand.facultyNames || (cand.facultyName ? [cand.facultyName] : []);
             const fac = facs[0] || "";
 
             if (fac && fac !== "-") {
+              // 🛑 STRICT QUOTA: Faculty must not exceed their total weekly allocated workload
+              const facAllocTotal = allAllocations.reduce((acc, a) => {
+                if (a.facultyNames && a.facultyNames.some(fn => isSameFacultyName(fn, fac))) {
+                  return acc + (Number(a.hoursPerWeek) || 0);
+                }
+                return acc;
+              }, 0);
+
+              let facCurrentHours = 0;
+              schedule.classes.forEach(cItem => {
+                DAYS.forEach(d => {
+                  (cItem.days?.[d] || []).forEach(slotItem => {
+                    if (slotItem && slotItem.facultyNames && slotItem.facultyNames.some(fn => isSameFacultyName(fn, fac))) {
+                      facCurrentHours++;
+                    }
+                  });
+                });
+              });
+
+              if (facAllocTotal > 0 && facCurrentHours >= facAllocTotal) continue;
+
               if (busyFac[day][p]?.has(fac.toLowerCase())) continue;
               // STRICT: Faculty must NOT be teaching adjacent period p - 1 or p + 1!
               if (p > 1 && busyFac[day][p - 1]?.has(fac.toLowerCase())) continue;
@@ -2480,14 +2695,15 @@ const healScheduleFreeSlots = async (schedule, department) => {
   return true;
 };
 
-// GET saved timetable schedule (automatically heals & fills FREE slots)
+// GET saved timetable schedule (automatically heals & fills FREE slots, and prunes any excess hours)
 router.get("/schedule", async (req, res) => {
   try {
     const { department = "CSE", academicYear = "2026-2027", semesterType = "Odd" } = req.query;
     let schedule = await TimetableSchedule.findOne({ department, academicYear, semesterType });
     if (schedule && !schedule.isLocked) {
+      const sanitized = await sanitizeExcessSubjectHours(schedule, department);
       const healed = await healScheduleFreeSlots(schedule, department);
-      if (healed) {
+      if (sanitized || healed) {
         schedule.facultySchedules = await buildFacultySchedules(schedule, department);
         schedule.markModified("classes");
         schedule.markModified("facultySchedules");
@@ -2507,14 +2723,15 @@ router.post("/schedule/fill-free", async (req, res) => {
     let schedule = await TimetableSchedule.findOne({ department, academicYear, semesterType });
     if (!schedule) return res.status(404).json({ error: "Schedule not found" });
 
+    const sanitized = await sanitizeExcessSubjectHours(schedule, department);
     const healed = await healScheduleFreeSlots(schedule, department);
-    if (healed) {
+    if (sanitized || healed) {
       schedule.facultySchedules = await buildFacultySchedules(schedule, department);
       schedule.markModified("classes");
       schedule.markModified("facultySchedules");
       await schedule.save();
     }
-    res.json({ success: true, message: "All Free periods successfully filled with conflict-free subjects!", schedule });
+    res.json({ success: true, message: "All periods successfully verified and conflict-free!", schedule });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
