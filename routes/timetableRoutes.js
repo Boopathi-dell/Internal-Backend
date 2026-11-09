@@ -176,6 +176,40 @@ const isSameSubjectSlot = (slot, allocItem) => {
   return false;
 };
 
+// Helper: Checks if subject is Maths or Tough (Forbidden in Period 7)
+const isMathsOrToughSubject = (subj) => {
+  if (!subj) return false;
+  if (subj.difficulty === "Tough") return true;
+  const str = `${subj.subjectName || subj.name || ""} ${subj.shortName || ""} ${subj.subjectCode || subj.code || ""}`.toLowerCase();
+  return /math|algebra|calculus|discrete|probability|statistics|numerical|pbs|nm|dm|flat|toc|automata|compiler|pas|daa|p&s|ps|maths/i.test(str);
+};
+
+// Helper: Checks if faculty is a Senior Administrative Leader (HOD, Asst HOD, ASP / Associate Professor)
+// USER RULE 5: HOD, ASST HOD, and ASP MUST NEVER have classes in Period 1 or Period 2!
+// (Morning periods 1 & 2 are strictly reserved for administrative duties, meetings, attendance, etc.)
+const isSeniorAdminFaculty = (facultyName, staffMap = {}) => {
+  if (!facultyName || facultyName === "-") return false;
+  const clean = String(facultyName).trim().toLowerCase();
+
+  // Check string keywords in facultyName
+  if (clean.includes("hod") || clean.includes("head") || clean.includes("asp") || clean.includes("assoc")) {
+    return true;
+  }
+
+  // Check Staff database record designation
+  if (staffMap) {
+    const matchedKey = Object.keys(staffMap).find(k => isSameFacultyName(k, clean));
+    if (matchedKey && staffMap[matchedKey]) {
+      const desig = (staffMap[matchedKey].designation || "").toLowerCase();
+      if (desig.includes("head") || desig.includes("hod") || desig.includes("assoc") || desig.includes("asp")) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+};
+
 // CASCADE helper: automatically updates allocations, schedule slots, and faculty routines everywhere
 async function cascadeFacultyNameChange(oldName, newName, department = "CSE") {
   if (!oldName || !newName) {
@@ -1008,6 +1042,13 @@ router.post("/generate", async (req, res) => {
       });
     }
 
+    // Load all staff database records to check designations (HOD, Asst HOD, ASP, Prof, AP)
+    const allStaffMembers = await Staff.find({ department: department || "CSE" });
+    const staffMap = {};
+    allStaffMembers.forEach(s => {
+      if (s.name) staffMap[s.name.trim().toLowerCase()] = s;
+    });
+
     // Sync with SubjectMaster so latest slotPattern (e.g. "2+2", "2+1") is ALWAYS honored directly from curriculum
     try {
       const subjectMasters = await SubjectMaster.find({ department: department || "CSE" });
@@ -1172,6 +1213,36 @@ router.post("/generate", async (req, res) => {
       return placed < maxNeeded;
     };
 
+    // Helper: Checks if faculty is a Senior Administrative Leader (HOD, Asst HOD, ASP / Associate Professor)
+    // USER RULE 5: HOD, ASST HOD, and ASP MUST NEVER have classes in Period 1 or Period 2!
+    // (Morning periods 1 & 2 are strictly reserved for administrative duties, meetings, attendance, etc.)
+    const isSeniorAdminFaculty = (facultyName) => {
+      if (!facultyName || facultyName === "-") return false;
+      const clean = String(facultyName).trim().toLowerCase();
+
+      // Check string keywords in facultyName
+      if (clean.includes("hod") || clean.includes("head") || clean.includes("asp") || clean.includes("assoc")) {
+        return true;
+      }
+
+      // Check Staff database record designation
+      const matchedKey = Object.keys(staffMap).find(k => isSameFacultyName(k, clean));
+      if (matchedKey && staffMap[matchedKey]) {
+        const desig = (staffMap[matchedKey].designation || "").toLowerCase();
+        if (desig.includes("head") || desig.includes("hod") || desig.includes("assoc") || desig.includes("asp")) {
+          return true;
+        }
+      }
+
+      // Check Coordinator data
+      if (savedAlloc?.coordinators) {
+        const hodStr = (savedAlloc.coordinators.hod || "").toLowerCase();
+        if (hodStr && isSameFacultyName(clean, hodStr)) return true;
+      }
+
+      return false;
+    };
+
     // Helper: Daily teaching hours for faculty on day
     const getFacultyDailyHours = (facultyName, day) => {
       if (!facultyName || !facultyBusy[facultyName] || !facultyBusy[facultyName][day]) return 0;
@@ -1194,6 +1265,11 @@ router.post("/generate", async (req, res) => {
     // They must have mandatory rest / preparation breaks between every class.
     const causesFacultyContinuousFatigue = (facultyName, day, p) => {
       if (!facultyName || facultyName === "-") return false;
+
+      // 0. HARD BAN: HOD, ASST HOD, and ASP MUST NEVER have classes in Period 1 or Period 2!
+      if (p <= 2 && isSeniorAdminFaculty(facultyName)) {
+        return true; // Strictly reject: Morning periods 1 & 2 reserved for administrative duties
+      }
 
       // 1. Immediate predecessor check: Is faculty already teaching Period p - 1?
       // (Even across lunch break between P4 and P5, avoid back-to-back teaching without proper rest)
@@ -1226,6 +1302,11 @@ router.post("/generate", async (req, res) => {
       if (!facultyName || facultyName === "-") return false;
       const minP = Math.min(...blockPeriods);
       const maxP = Math.max(...blockPeriods);
+
+      // 0. HARD BAN: HOD, ASST HOD, and ASP MUST NEVER have block sessions starting or running in Period 1 or 2!
+      if (minP <= 2 && isSeniorAdminFaculty(facultyName)) {
+        return true;
+      }
 
       // 1. HARD BAN: Faculty can NEVER have more than 1 block session on the same day!
       // (Stops faculty from teaching a lab in the morning AND another 2-hour block in the afternoon!)
@@ -1383,7 +1464,7 @@ router.post("/generate", async (req, res) => {
       if (!subj) return false;
       if (subj.difficulty === "Tough") return true;
       const str = `${subj.subjectName || ""} ${subj.shortName || ""} ${subj.subjectCode || ""}`.toLowerCase();
-      return /math|algebra|calculus|discrete|probability|statistics|numerical|pbs|nm|dm|flat|toc|automata|compiler/i.test(str);
+      return /math|algebra|calculus|discrete|probability|statistics|numerical|pbs|nm|dm|flat|toc|automata|compiler|pas|daa|p&s|ps|maths/i.test(str);
     };
 
     // Helper: Dynamic Candidate blocks for Lab based on hoursPerWeek (Supports 1-hr, 2-hr, 3-hr labs)
@@ -1641,7 +1722,7 @@ router.post("/generate", async (req, res) => {
       const advisor = classAdvisors && classAdvisors[ck];
       if (!advisor) return;
 
-      if (!isFacultyFree(advisor, "Monday", 1)) {
+      if (!isFacultyFree(advisor, "Monday", 1) || isSeniorAdminFaculty(advisor)) {
         return;
       }
 
@@ -2312,7 +2393,8 @@ router.post("/generate", async (req, res) => {
             const hasLibToday = PERIODS.some(pr => classGrid[ck][day][pr]?.type === "Library" || classGrid[ck][day][pr]?.shortName === "LIB");
             const hasSemToday = PERIODS.some(pr => classGrid[ck][day][pr]?.type === "Seminar" || classGrid[ck][day][pr]?.shortName === "SEM");
 
-            if (!hasLibToday && libItem) {
+            // STRICT USER RULE 2: Seminar and Library must NEVER appear in Period 1!
+            if (p !== 1 && !hasLibToday && libItem) {
               classGrid[ck][day][p] = {
                 period: p,
                 time: timings[p] || DEFAULT_TIMINGS[p],
@@ -2325,7 +2407,7 @@ router.post("/generate", async (req, res) => {
                 difficulty: "Light",
                 room: "Library"
               };
-            } else if (!hasSemToday && semItem) {
+            } else if (p !== 1 && !hasSemToday && semItem) {
               classGrid[ck][day][p] = {
                 period: p,
                 time: timings[p] || DEFAULT_TIMINGS[p],
@@ -2342,12 +2424,12 @@ router.post("/generate", async (req, res) => {
               classGrid[ck][day][p] = {
                 period: p,
                 time: timings[p] || DEFAULT_TIMINGS[p],
-                subjectCode: "MENTOR",
-                subjectName: "Mentoring & Student Counseling",
-                shortName: "MENTOR",
+                subjectCode: p === 1 ? "TUT" : "MENTOR",
+                subjectName: p === 1 ? "Technical Tutorial & Self-Study" : "Mentoring & Student Counseling",
+                shortName: p === 1 ? "TUT" : "MENTOR",
                 facultyName: "-",
                 facultyNames: [],
-                type: "Mentoring",
+                type: p === 1 ? "Tutorial" : "Mentoring",
                 difficulty: "Light",
                 room: "LH-1"
               };
@@ -2375,7 +2457,6 @@ router.post("/generate", async (req, res) => {
 
     // 5. Generate Faculty Schedule Views (Each faculty's weekly clash-free routine)
     const facultySchedules = {};
-    const allStaffMembers = await Staff.find({ department });
     allStaffMembers.forEach(s => {
       facultySchedules[s.name] = {
         name: s.name,
@@ -2694,6 +2775,12 @@ const healScheduleFreeSlots = async (schedule, department) => {
   });
   const allAllocations = allocDoc?.allocations || [];
 
+  const allStaffMembers = await Staff.find({ department: department || schedule.department || "CSE" });
+  const staffMap = {};
+  allStaffMembers.forEach(s => {
+    if (s.name) staffMap[s.name.trim().toLowerCase()] = s;
+  });
+
   let modified = false;
 
   // Build current busy faculty matrix across all classes
@@ -2816,14 +2903,15 @@ const healScheduleFreeSlots = async (schedule, department) => {
 
           // Zero Clash check: Faculty must not teach another class in period p!
           if (fac && fac !== "-") {
+            // USER RULE 5: HOD, ASST HOD, and ASP never in Period 1 or Period 2!
+            if (p <= 2 && isSeniorAdminFaculty(fac, staffMap)) continue;
+
             if (busyFac[day][p]?.has(fac.toLowerCase())) continue;
 
-            // Adjacent period fatigue: avoid >2 continuous periods
+            // USER RULE 3: Zero consecutive periods for faculty
             const leftBusy = p > 1 && busyFac[day][p - 1]?.has(fac.toLowerCase());
             const rightBusy = p < 7 && busyFac[day][p + 1]?.has(fac.toLowerCase());
-            if (leftBusy && rightBusy) continue;
-            if (leftBusy && p > 2 && busyFac[day][p - 2]?.has(fac.toLowerCase())) continue;
-            if (rightBusy && p < 6 && busyFac[day][p + 2]?.has(fac.toLowerCase())) continue;
+            if (leftBusy || rightBusy) continue;
 
             // Lunch break boundary
             if (p === 4 && busyFac[day][5]?.has(fac.toLowerCase())) continue;
@@ -2838,7 +2926,7 @@ const healScheduleFreeSlots = async (schedule, department) => {
           }
 
           // Math/Tough avoids period 7
-          const isMath = /math|probability|statistics|calculus|discrete|pas|flat|compiler/i.test(`${cand.subjectName || cand.name || ""} ${cand.shortName || ""} ${cand.subjectCode || cand.code || ""}`);
+          const isMath = isMathsOrToughSubject(cand);
           if (p === 7 && isMath) continue;
 
           // If slot had an existing busy faculty, remove from busyFac
@@ -2947,9 +3035,13 @@ const healScheduleFreeSlots = async (schedule, department) => {
               if (facAllocTotal > 0 && facCurrentHours >= facAllocTotal) continue;
 
               if (busyFac[day][p]?.has(fac.toLowerCase())) continue;
+              // USER RULE 5: HOD, ASST HOD, and ASP never in Period 1 or Period 2!
+              if (p <= 2 && isSeniorAdminFaculty(fac, staffMap)) continue;
               // STRICT: Faculty must NOT be teaching adjacent period p - 1 or p + 1!
               if (p > 1 && busyFac[day][p - 1]?.has(fac.toLowerCase())) continue;
               if (p < 7 && busyFac[day][p + 1]?.has(fac.toLowerCase())) continue;
+              if (p === 4 && busyFac[day][5]?.has(fac.toLowerCase())) continue;
+              if (p === 5 && busyFac[day][4]?.has(fac.toLowerCase())) continue;
             }
 
             // Avoid same subject in adjacent period
@@ -2960,7 +3052,7 @@ const healScheduleFreeSlots = async (schedule, department) => {
             }
 
             // Avoid math in period 7
-            const isMath = /math|probability|statistics|calculus|discrete|pas|flat|compiler/i.test(`${cand.subjectName || cand.name || ""} ${cand.shortName || ""} ${cand.subjectCode || cand.code || ""}`);
+            const isMath = isMathsOrToughSubject(cand);
             if (p === 7 && isMath) continue;
 
             chosen = {
@@ -2986,7 +3078,8 @@ const healScheduleFreeSlots = async (schedule, department) => {
             const hasLib = slots.some(x => x.type === "Library" || x.shortName === "LIB");
             const hasSem = slots.some(x => x.type === "Seminar" || x.shortName === "SEM");
 
-            if (!hasSem) {
+            // STRICT USER RULE 2: Seminar and Library must NEVER appear in Period 1!
+            if (p !== 1 && !hasSem) {
               chosen = {
                 period: p,
                 time: s?.time || DEFAULT_TIMINGS[p],
@@ -2999,7 +3092,7 @@ const healScheduleFreeSlots = async (schedule, department) => {
                 difficulty: "Light",
                 room: "Seminar Hall"
               };
-            } else if (!hasLib) {
+            } else if (p !== 1 && !hasLib) {
               chosen = {
                 period: p,
                 time: s?.time || DEFAULT_TIMINGS[p],
@@ -3016,12 +3109,12 @@ const healScheduleFreeSlots = async (schedule, department) => {
               chosen = {
                 period: p,
                 time: s?.time || DEFAULT_TIMINGS[p],
-                subjectCode: "MENTOR",
-                subjectName: "Mentoring & Student Counseling",
-                shortName: "MENTOR",
+                subjectCode: p === 1 ? "TUT" : "MENTOR",
+                subjectName: p === 1 ? "Technical Tutorial & Self-Study" : "Mentoring & Student Counseling",
+                shortName: p === 1 ? "TUT" : "MENTOR",
                 facultyName: "-",
                 facultyNames: [],
-                type: "Mentoring",
+                type: p === 1 ? "Tutorial" : "Mentoring",
                 difficulty: "Light",
                 room: "LH-1"
               };
