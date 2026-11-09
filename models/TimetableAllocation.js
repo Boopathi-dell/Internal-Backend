@@ -14,8 +14,9 @@ const singleAllocationSchema = new mongoose.Schema({
   slotPattern: { type: String, default: "regular" },
   hoursPerWeek: { type: Number, default: 4 },
   facultyNames: { type: [String], default: [] },
-  facultyIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "Staff" }]
-});
+  facultyIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "Staff" }],
+  fixedSlots: { type: Array, default: [] }
+}, { strict: false });
 
 const timetableAllocationSchema = new mongoose.Schema({
   department: { type: String, default: "CSE" },

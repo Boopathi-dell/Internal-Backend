@@ -1554,6 +1554,84 @@ router.post("/generate", async (req, res) => {
     const unplacedLabs = [];
     const unplacedTheory = [];
 
+    // --- STEP 0.0: PRE-LOCKED / PINNED INSTITUTIONAL SLOTS (Option 1: Fixed Slots & Option 3: Grid Pinning) ---
+    // User Requirement:
+    // Support Fixed Institutional Slots (Library, Placement Hall, Seminar, or pinned manual edits).
+    // If NO slots are fixed/pinned, this step is automatically bypassed and standard auto-generation runs!
+
+    // 1. Process Pinned Slots from existing schedule (Option 3: Grid Pinning)
+    if (existingSchedule && existingSchedule.classes) {
+      existingSchedule.classes.forEach(oldCls => {
+        const ck = oldCls.classKey;
+        if (!classGrid[ck]) return;
+        DAYS.forEach(day => {
+          (oldCls.days?.[day] || []).forEach(oldSlot => {
+            if (oldSlot && oldSlot.isPinned && oldSlot.period) {
+              const p = oldSlot.period;
+              const facs = oldSlot.facultyNames || (oldSlot.facultyName && oldSlot.facultyName !== "-" ? [oldSlot.facultyName] : []);
+              classGrid[ck][day][p] = {
+                period: p,
+                time: oldSlot.time || timings[p] || DEFAULT_TIMINGS[p],
+                subjectCode: oldSlot.subjectCode,
+                subjectName: oldSlot.subjectName,
+                shortName: oldSlot.shortName || oldSlot.subjectCode,
+                facultyName: oldSlot.facultyName || "-",
+                facultyNames: facs,
+                type: oldSlot.type || "Theory",
+                difficulty: oldSlot.difficulty || "Normal",
+                room: oldSlot.room || "LH-1",
+                isPinned: true
+              };
+              facs.forEach(f => {
+                if (f && f !== "-") markFacultyBusy(f, day, p, ck);
+              });
+
+              // Track placed hour on matching allocation so it does not duplicate
+              const matchAlloc = classGroups[ck]?.allocations?.find(a => isSameSubjectSlot(oldSlot, a));
+              if (matchAlloc) {
+                matchAlloc.placedBlocksHours = (matchAlloc.placedBlocksHours || 0) + 1;
+              }
+            }
+          });
+        });
+      });
+    }
+
+    // 2. Process Fixed Slots from Allocations (Option 1: Workload Allocation Fixed Day & Period)
+    classKeys.forEach(ck => {
+      const clsAllocations = classGroups[ck].allocations || [];
+      clsAllocations.forEach(alloc => {
+        const slotsToFix = Array.isArray(alloc.fixedSlots) ? alloc.fixedSlots : [];
+        slotsToFix.forEach(fix => {
+          const day = fix.day;
+          const p = Number(fix.period);
+          if (DAYS.includes(day) && p >= 1 && p <= 7) {
+            // Place if slot is not already taken
+            if (classGrid[ck][day][p] === null) {
+              const facs = alloc.facultyNames || (alloc.facultyName && alloc.facultyName !== "-" ? [alloc.facultyName] : []);
+              classGrid[ck][day][p] = {
+                period: p,
+                time: timings[p] || DEFAULT_TIMINGS[p],
+                subjectCode: alloc.subjectCode,
+                subjectName: alloc.subjectName,
+                shortName: alloc.shortName || alloc.subjectCode,
+                facultyName: facs.join(", ") || "-",
+                facultyNames: facs,
+                type: alloc.type || "Theory",
+                difficulty: alloc.difficulty || "Normal",
+                room: alloc.room || (alloc.type === "Library" ? "Library" : (alloc.type === "Lab" ? "Lab" : "LH-1")),
+                isPinned: true
+              };
+              facs.forEach(f => {
+                if (f && f !== "-") markFacultyBusy(f, day, p, ck);
+              });
+              alloc.placedBlocksHours = (alloc.placedBlocksHours || 0) + 1;
+            }
+          }
+        });
+      });
+    });
+
     // --- STEP 0: CLASS ADVISOR SUBJECT ON MONDAY PERIOD 1 ---
     // User Requirement:
     // Monday first hour is NOT a dummy advisor hour.
@@ -2535,10 +2613,10 @@ const sanitizeExcessSubjectHours = async (schedule, department) => {
         let excessCount = placedSlots.length - maxAllowed;
 
         // Pruning priority:
-        // 1. First remove single Theory / Elective slots (not external training blocks and not lab blocks)
+        // 1. First remove single Theory / Elective slots (never remove pinned slots and not lab blocks)
         // 2. Keep the core multi-period blocks intact!
-        const singleSlots = placedSlots.filter(p => !p.slot.isTraining && !isBlockType(p.slot.type));
-        const candidatesToRemove = singleSlots.length >= excessCount ? singleSlots : placedSlots;
+        const singleSlots = placedSlots.filter(p => !p.slot.isTraining && !isBlockType(p.slot.type) && !p.slot.isPinned);
+        const candidatesToRemove = singleSlots.length >= excessCount ? singleSlots : placedSlots.filter(p => !p.slot.isPinned);
 
         // Remove from the end
         for (let i = candidatesToRemove.length - 1; i >= 0 && excessCount > 0; i--) {
@@ -2573,7 +2651,7 @@ const sanitizeExcessSubjectHours = async (schedule, department) => {
       const dayArr = cls.days?.[day] || [];
       const seenElectives = {};
       dayArr.forEach((slot, slotIdx) => {
-        if (!slot || slot.type === "Free" || slot.subjectCode === "FREE") return;
+        if (!slot || slot.type === "Free" || slot.subjectCode === "FREE" || slot.isPinned) return;
         const code = (slot.shortName || slot.subjectCode || "").toUpperCase();
         // If OE or elective or non-faculty filler occurs more than once on the same day:
         if (code === "OE" || code === "OPEN ELECTIVE" || ((!slot.facultyName || slot.facultyName === "-") && (slot.type === "Theory" || slot.type === "Elective"))) {
@@ -2709,6 +2787,7 @@ const healScheduleFreeSlots = async (schedule, department) => {
         for (let pIdx = 0; pIdx < dayArr.length; pIdx++) {
           if (defItem.deficit <= 0) break;
           const s = dayArr[pIdx];
+          if (s && s.isPinned) continue; // Pinned slots are protected!
           const p = s?.period || (pIdx + 1);
 
           const isFree = !s || s.type === "Free" || s.subjectCode === "FREE" || s.shortName === "FREE";

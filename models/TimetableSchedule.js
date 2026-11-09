@@ -11,8 +11,9 @@ const periodSlotSchema = new mongoose.Schema({
   type: { type: String, default: "Theory" },
   difficulty: { type: String, default: "Normal" },
   isTraining: { type: Boolean, default: false },
-  room: { type: String, default: "" }
-}, { _id: false });
+  room: { type: String, default: "" },
+  isPinned: { type: Boolean, default: false }
+}, { _id: false, strict: false });
 
 const classScheduleSchema = new mongoose.Schema({
   classKey: { type: String, required: true }, // e.g. "II-A", "III-A", "IV-A"
