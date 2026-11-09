@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const ClassData = require("../models/Class");
+const Roster = require("../models/Roster");
 
 const formatDate = (dateStr) => {
   if (!dateStr) return "";
@@ -184,6 +185,185 @@ router.post("/roster", async (req, res) => {
   }
 });
 
+
+// BULK CLONE & GENERATE CLASSES ACROSS SECTIONS AND EXAMS
+router.post("/bulk-clone", async (req, res) => {
+  try {
+    const {
+      source,
+      targetExamsForSource = [],
+      targetSections = []
+    } = req.body;
+
+    if (!source || !source.year || !source.semester || !source.section) {
+      return res.status(400).json({ error: "Source class configuration is required." });
+    }
+
+    const prog = source.programme || "B.E";
+    const dept = source.department || "CSE";
+    const y = source.year;
+    const sem = source.semester;
+    const baseCourses = source.courseDetails || [];
+    const sourceStudents = source.students || [];
+
+    const getExamMarks = (exam) => {
+      const ex = String(exam || "").toLowerCase();
+      if (ex.includes("unit test")) return { passMark: 15, markPerSubject: 30 };
+      if (ex === "cia - i" || ex === "cia - ii") return { passMark: 25, markPerSubject: 50 };
+      if (ex === "cia - iii" || ex === "ese") return { passMark: 50, markPerSubject: 100 };
+      return { passMark: 50, markPerSubject: 100 };
+    };
+
+    const results = [];
+
+    const createOrUpdateClass = async (targetSec, targetExam, facultyMap = {}, isSourceSec = false) => {
+      const className = `${prog}-${dept} - ${y}/${sem}/${targetSec} - ${targetExam}`;
+      const yearSemSec = `${y}/${sem}/${targetSec}`;
+      const { passMark, markPerSubject } = getExamMarks(targetExam);
+
+      // Map courses and apply faculty overrides
+      const mappedCourses = baseCourses.map(c => {
+        const customFac = facultyMap[c.courseCode] !== undefined ? facultyMap[c.courseCode] : c.facultyName;
+        return {
+          courseCode: c.courseCode || "",
+          courseName: c.courseName || "",
+          shortName: c.shortName || "",
+          facultyName: customFac || "",
+          credits: c.credits !== undefined ? c.credits : 3
+        };
+      });
+      const subjects = mappedCourses.map(c => c.courseCode || "");
+
+      // Determine students roster
+      let targetStudents = [];
+      if (isSourceSec && sourceStudents.length > 0) {
+        targetStudents = sourceStudents.map(s => ({
+          regNo: s.regNo,
+          name: s.name,
+          gender: s.gender || "Boy",
+          studentType: s.studentType || "Day Scholar",
+          dob: s.dob || "",
+          marks: (s.marks && s.marks.length === subjects.length) ? s.marks : Array(subjects.length).fill("")
+        }));
+      } else {
+        // Load Master Roster for target cohort
+        const cohortName = `${prog}-${dept} - ${yearSemSec}`;
+        const rosterDoc = await Roster.findOne({ cohortName });
+        if (rosterDoc && rosterDoc.students && rosterDoc.students.length > 0) {
+          targetStudents = rosterDoc.students.map(s => ({
+            regNo: s.regNo,
+            name: s.name,
+            gender: s.gender || "Boy",
+            studentType: s.studentType || "Day Scholar",
+            dob: s.dob || "",
+            marks: Array(subjects.length).fill("")
+          }));
+        } else {
+          // Fallback: check if any existing class with this yearSemSec has students
+          const existingPeer = await ClassData.findOne({
+            programme: prog,
+            department: dept,
+            yearSemSec,
+            isDeleted: { $ne: true }
+          });
+          if (existingPeer && existingPeer.students && existingPeer.students.length > 0) {
+            targetStudents = existingPeer.students.map(s => ({
+              regNo: s.regNo,
+              name: s.name,
+              gender: s.gender || "Boy",
+              studentType: s.studentType || "Day Scholar",
+              dob: s.dob || "",
+              marks: Array(subjects.length).fill("")
+            }));
+          }
+        }
+      }
+
+      // Purge any deleted class with same name
+      await ClassData.deleteOne({ className, isDeleted: true });
+
+      let cls = await ClassData.findOne({ className });
+      if (cls) {
+        cls.subjects = subjects;
+        cls.courseDetails = mappedCourses;
+        cls.passMark = passMark;
+        cls.markPerSubject = markPerSubject;
+        cls.examName = targetExam;
+        cls.targetPassPercentage = Number(source.targetPassPercentage) || 85;
+        cls.date = source.date || cls.date || "";
+        cls.department = dept;
+        cls.yearSemSec = yearSemSec;
+        cls.programme = prog;
+        cls.isDeleted = false;
+        if (source.eseGradingSystem) cls.eseGradingSystem = source.eseGradingSystem;
+
+        if (cls.students && cls.students.length > 0 && targetStudents.length > 0) {
+          const merged = targetStudents.map(newS => {
+            const old = cls.students.find(s => s.regNo === newS.regNo);
+            if (old) {
+              return {
+                ...newS,
+                marks: (old.marks && old.marks.length === subjects.length) ? old.marks : Array(subjects.length).fill("")
+              };
+            }
+            return newS;
+          });
+          cls.students = merged;
+        } else if (targetStudents.length > 0) {
+          cls.students = targetStudents;
+        }
+
+        await cls.save();
+        results.push({ className, action: "updated", studentCount: cls.students?.length || 0 });
+      } else {
+        const newClass = new ClassData({
+          className,
+          subjects,
+          courseDetails: mappedCourses,
+          passMark,
+          examName: targetExam,
+          markPerSubject,
+          students: targetStudents,
+          targetPassPercentage: Number(source.targetPassPercentage) || 85,
+          date: source.date || "",
+          department: dept,
+          yearSemSec,
+          programme: prog,
+          allowEditing: true,
+          eseGradingSystem: source.eseGradingSystem || "System 2"
+        });
+        await newClass.save();
+        results.push({ className, action: "created", studentCount: targetStudents.length });
+      }
+    };
+
+    // 1. Generate target exams for SOURCE section
+    for (const ex of targetExamsForSource) {
+      if (ex === source.examName) continue;
+      await createOrUpdateClass(source.section, ex, {}, true);
+    }
+
+    // 2. Generate target sections
+    for (const secConfig of targetSections) {
+      const sec = secConfig.section;
+      if (!sec) continue;
+      const examsToRun = secConfig.exams && secConfig.exams.length > 0 ? secConfig.exams : [source.examName];
+      const facMap = secConfig.facultyMap || {};
+      for (const ex of examsToRun) {
+        await createOrUpdateClass(sec, ex, facMap, false);
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: `Successfully generated and synchronized ${results.length} class(es)!`,
+      results
+    });
+  } catch (err) {
+    console.error("bulk-clone error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
 
 // CREATE OR UPDATE A CLASS (Admin Panel Data Setup)
 router.post("/", async (req, res) => {
