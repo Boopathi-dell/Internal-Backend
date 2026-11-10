@@ -775,10 +775,8 @@ async function unassignFacultyEverywhere(facultyName, department = "CSE") {
     updatedClasses = sDoc.classes;
     updatedFacultySchedules = facultySchedules;
   }
-
-  return { allocations: updatedAllocations, classes: updatedClasses, facultySchedules: updatedFacultySchedules };
+ return { allocations: updatedAllocations, classes: updatedClasses, facultySchedules: updatedFacultySchedules };
 }
-
 // DELETE a staff member (with full cascade delete across allocations & schedule)
 router.delete("/staff/:id", async (req, res) => {
   try {
@@ -1136,6 +1134,13 @@ router.post("/generate", async (req, res) => {
       if (!facultyBusy[facultyName]) facultyBusy[facultyName] = {};
       if (!facultyBusy[facultyName][day]) facultyBusy[facultyName][day] = {};
       facultyBusy[facultyName][day][period] = classKey;
+    };
+
+    const unmarkFacultyBusy = (facultyName, day, period) => {
+      if (!facultyName) return;
+      if (facultyBusy[facultyName]?.[day]) {
+        delete facultyBusy[facultyName][day][period];
+      }
     };
 
     const isFacultyFree = (facultyName, day, period) => {
@@ -2297,63 +2302,61 @@ router.post("/generate", async (req, res) => {
     });
 
     // --- STEP C: AUTO-FILL REMAINING EMPTY PERIODS (GUARANTEE 100% FULL 35-PERIOD TIMETABLE) ---
-    // User Requirement: ZERO "FREE" periods! Every period across all 5 days is productively scheduled.
-    // 1. First priority: Check if any allocated Core Theory still has remaining unplaced hours (e.g. from clashes in Step B)
-    //    Strictly verifying ZERO faculty clash, ZERO fatigue, and avoiding consecutive repeats.
-    //    NEVER exceed a subject's hoursPerWeek or a faculty's allocated workload!
-    // 2. Second priority: If all subjects have completed their quota, assign Library, Seminar, or Mentoring Hour.
+    // User Requirement: ZERO "TUT" or dummy subjects! If free, show "Free".
+    // AND: If class has remaining unplaced subject hours, ALWAYS place them via direct placement or intelligent swap repair!
     classKeys.forEach(ck => {
       const clsAllocations = classGroups[ck].allocations || [];
-      const coreTheory = clsAllocations.filter(a => isPureTheorySubject(a));
-      // Prioritize subjects with highest deficit (missing hours) first, then core subjects with faculty, then Maths / Analytical subjects
-      const sortedTheory = [...coreTheory].sort((a, b) => {
-        const getDeficit = (item) => {
-          const maxNeeded = Number(item.hoursPerWeek) || 4;
-          let count = 0;
+
+      // Helper: All allocation candidates that can take a single hour, sorted by highest deficit first
+      const getDeficitCandidates = () => {
+        return clsAllocations.filter(a => {
+          if (isBlockType(a.type) && a.slotPattern !== "regular" && (Number(a.hoursPerWeek) || 0) > 1) {
+            return false; // Leave multi-period monolithic lab blocks to Step 2
+          }
+          return canSubjectTakeMoreHoursInClass(ck, a);
+        }).sort((a, b) => {
+          const maxNeededA = Number(a.hoursPerWeek) || 4;
+          const maxNeededB = Number(b.hoursPerWeek) || 4;
+          let countA = 0;
+          let countB = 0;
           DAYS.forEach(d => {
             PERIODS.forEach(pr => {
-              if (classGrid[ck]?.[d]?.[pr] && isSameSubjectSlot(classGrid[ck][d][pr], item)) count++;
+              if (classGrid[ck]?.[d]?.[pr] && isSameSubjectSlot(classGrid[ck][d][pr], a)) countA++;
+              if (classGrid[ck]?.[d]?.[pr] && isSameSubjectSlot(classGrid[ck][d][pr], b)) countB++;
             });
           });
-          return Math.max(0, maxNeeded - count);
-        };
-        const defA = getDeficit(a);
-        const defB = getDeficit(b);
-        if (defA !== defB) return defB - defA;
-
-        // Core subjects with assigned faculty MUST take priority over faculty-less electives/fillers (e.g. OE)
-        const hasFacA = (a.facultyNames && a.facultyNames.length > 0 && a.facultyNames[0] !== "-") ? 1 : 0;
-        const hasFacB = (b.facultyNames && b.facultyNames.length > 0 && b.facultyNames[0] !== "-") ? 1 : 0;
-        if (hasFacA !== hasFacB) return hasFacB - hasFacA;
-
-        const isToughA = isMathsOrToughSubject(a) ? 1 : 0;
-        const isToughB = isMathsOrToughSubject(b) ? 1 : 0;
-        return isToughB - isToughA;
-      });
+          const defA = Math.max(0, maxNeededA - countA);
+          const defB = Math.max(0, maxNeededB - countB);
+          if (defA !== defB) return defB - defA; // Highest deficit first!
+          const hasFacA = (a.facultyNames && a.facultyNames.length > 0 && a.facultyNames[0] !== "-") ? 1 : 0;
+          const hasFacB = (b.facultyNames && b.facultyNames.length > 0 && b.facultyNames[0] !== "-") ? 1 : 0;
+          return hasFacB - hasFacA;
+        });
+      };
 
       DAYS.forEach(day => {
         PERIODS.forEach(p => {
           if (classGrid[ck][day][p] !== null) return;
 
           let filled = false;
+          const deficitList = getDeficitCandidates();
 
-          // 1. Try Core Theory Tutorial / Revision ONLY IF subject still has remaining unplaced quota AND faculty has remaining hours!
-          for (const cand of sortedTheory) {
+          // 1. Direct placement of an unplaced deficit subject into (day, p)
+          for (const cand of deficitList) {
             const fac = (cand.facultyNames && cand.facultyNames.length > 0) ? cand.facultyNames[0] : "";
 
-            // 🛑 STRICT QUOTA CHECK: Subject must NOT exceed its hoursPerWeek!
-            // (e.g. DAA 4h must NEVER be placed 5 or 6 times!)
             if (!canSubjectTakeMoreHoursInClass(ck, cand)) continue;
-
-            // 🛑 STRICT QUOTA CHECK: Faculty must NOT exceed their allocated workload!
-            // (e.g. Dr. G. Kavitha 4h must NEVER teach 5 or 6 hours!)
             if (fac && !canFacultyTakeMoreHours(fac)) continue;
-
-            // Check faculty availability (CRITICAL ZERO CLASH!)
             if (fac && !isFacultyFree(fac, day, p)) continue;
             if (fac && causesFacultyContinuousFatigue(fac, day, p)) continue;
 
-            // Maths/Tough subjects strictly avoid Period 7
+            // Period 1 constraints: Pure theory only, NO HOD/ASP, NO Library/Seminar
+            if (p === 1) {
+              if (!isPureTheorySubject(cand)) continue;
+              if (fac && isSeniorAdminFaculty(fac)) continue;
+            }
+
+            // Period 7: Maths/Tough subjects strictly avoid Period 7
             if (p === 7 && isMathsOrToughSubject(cand)) continue;
 
             // Avoid same subject back-to-back in consecutive periods
@@ -2367,7 +2370,6 @@ router.post("/generate", async (req, res) => {
             const timesToday = PERIODS.filter(pr => classGrid[ck][day][pr] && isSameSubjectSlot(classGrid[ck][day][pr], cand)).length;
             if (timesToday >= 2) continue;
 
-            // Place as Theory
             classGrid[ck][day][p] = {
               period: p,
               time: timings[p] || DEFAULT_TIMINGS[p],
@@ -2378,14 +2380,111 @@ router.post("/generate", async (req, res) => {
               facultyNames: fac ? [fac] : [],
               type: cand.type || "Theory",
               difficulty: cand.difficulty || "Normal",
-              room: "LH-1"
+              room: cand.type === "Library" ? "Library" : (cand.type === "Seminar" ? "Seminar Hall" : "LH-1")
             };
             if (fac) markFacultyBusy(fac, day, p, ck);
             filled = true;
             break;
           }
 
-          // 2. If no core theory faculty was free, assign Library, Seminar, or Mentoring Hour
+          // 2. SWAP REPAIR: If direct placement into (day, p) was blocked, find another slot in this class to swap with!
+          if (!filled) {
+            for (const cand of deficitList) {
+              if (filled) break;
+              if (!canSubjectTakeMoreHoursInClass(ck, cand)) continue;
+              const candFac = (cand.facultyNames && cand.facultyNames.length > 0) ? cand.facultyNames[0] : "";
+              if (candFac && !canFacultyTakeMoreHours(candFac)) continue;
+
+              // Search all other periods in this class for a valid donor slot
+              for (const donorDay of DAYS) {
+                if (filled) break;
+                for (const donorP of PERIODS) {
+                  if (donorDay === day && donorP === p) continue;
+                  const donorSlot = classGrid[ck][donorDay][donorP];
+                  if (!donorSlot || donorSlot.isPinned) continue;
+                  if (isBlockType(donorSlot.type) || donorSlot.isTraining) continue; // Keep lab blocks intact
+                  if (donorSlot.type === "Free" || donorSlot.subjectCode === "FREE") continue;
+
+                  const donorFac = (donorSlot.facultyNames && donorSlot.facultyNames.length > 0) ? donorSlot.facultyNames[0] : (donorSlot.facultyName || "");
+
+                  // Step 2a: Can donorSlot move to (day, p)?
+                  if (donorFac && donorFac !== "-") unmarkFacultyBusy(donorFac, donorDay, donorP);
+
+                  const donorCanMoveToFreeSlot = (() => {
+                    if (donorFac && donorFac !== "-") {
+                      if (!isFacultyFree(donorFac, day, p)) return false;
+                      if (causesFacultyContinuousFatigue(donorFac, day, p)) return false;
+                    }
+                    if (p === 1) {
+                      if (!isPureTheorySubject(donorSlot)) return false;
+                      if (donorFac && isSeniorAdminFaculty(donorFac)) return false;
+                    }
+                    if (p === 7 && isMathsOrToughSubject(donorSlot)) return false;
+                    const left = p > 1 ? classGrid[ck][day][p - 1] : null;
+                    const right = p < 7 ? classGrid[ck][day][p + 1] : null;
+                    if ((left && isSameSubjectSlot(left, donorSlot)) || (right && isSameSubjectSlot(right, donorSlot))) return false;
+                    const timesOnDay = PERIODS.filter(pr => pr !== p && classGrid[ck][day][pr] && isSameSubjectSlot(classGrid[ck][day][pr], donorSlot)).length;
+                    if (timesOnDay >= 2) return false;
+                    return true;
+                  })();
+
+                  // Step 2b: Can cand take the vacated (donorDay, donorP)?
+                  const candCanTakeDonorSlot = (() => {
+                    if (!donorCanMoveToFreeSlot) return false;
+                    if (candFac && candFac !== "-") {
+                      if (!isFacultyFree(candFac, donorDay, donorP)) return false;
+                      if (causesFacultyContinuousFatigue(candFac, donorDay, donorP)) return false;
+                    }
+                    if (donorP === 1) {
+                      if (!isPureTheorySubject(cand)) return false;
+                      if (candFac && isSeniorAdminFaculty(candFac)) return false;
+                    }
+                    if (donorP === 7 && isMathsOrToughSubject(cand)) return false;
+                    const left = donorP > 1 ? classGrid[ck][donorDay][donorP - 1] : null;
+                    const right = donorP < 7 ? classGrid[ck][donorDay][donorP + 1] : null;
+                    if ((left && isSameSubjectSlot(left, cand)) || (right && isSameSubjectSlot(right, cand))) return false;
+                    const timesOnDonorDay = PERIODS.filter(pr => pr !== donorP && classGrid[ck][donorDay][pr] && isSameSubjectSlot(classGrid[ck][donorDay][pr], cand)).length;
+                    if (timesOnDonorDay >= 2) return false;
+                    return true;
+                  })();
+
+                  if (donorCanMoveToFreeSlot && candCanTakeDonorSlot) {
+                    // SWAP SUCCESSFUL!
+                    // 1. Move donorSlot to (day, p)
+                    classGrid[ck][day][p] = {
+                      ...donorSlot,
+                      period: p,
+                      time: timings[p] || DEFAULT_TIMINGS[p]
+                    };
+                    if (donorFac && donorFac !== "-") markFacultyBusy(donorFac, day, p, ck);
+
+                    // 2. Place cand into (donorDay, donorP)
+                    classGrid[ck][donorDay][donorP] = {
+                      period: donorP,
+                      time: timings[donorP] || DEFAULT_TIMINGS[donorP],
+                      subjectCode: cand.subjectCode,
+                      subjectName: cand.subjectName,
+                      shortName: cand.shortName || cand.subjectCode,
+                      facultyName: candFac || "-",
+                      facultyNames: candFac ? [candFac] : [],
+                      type: cand.type || "Theory",
+                      difficulty: cand.difficulty || "Normal",
+                      room: cand.type === "Library" ? "Library" : (cand.type === "Seminar" ? "Seminar Hall" : "LH-1")
+                    };
+                    if (candFac && candFac !== "-") markFacultyBusy(candFac, donorDay, donorP, ck);
+
+                    filled = true;
+                    break;
+                  } else {
+                    // Restore donorFac busy status if swap didn't proceed
+                    if (donorFac && donorFac !== "-") markFacultyBusy(donorFac, donorDay, donorP, ck);
+                  }
+                }
+              }
+            }
+          }
+
+          // 3. Fallback: If no deficit subject existed, or all allocations are 100% fulfilled:
           if (!filled) {
             const libItem = clsAllocations.find(a => (a.type || "").toLowerCase().includes("lib") || (a.subjectName || "").toLowerCase().includes("lib") || (a.shortName || "").toLowerCase().includes("lib"));
             const semItem = clsAllocations.find(a => (a.type || "").toLowerCase().includes("sem") || (a.subjectName || "").toLowerCase().includes("sem") || (a.shortName || "").toLowerCase().includes("sem"));
@@ -2421,17 +2520,18 @@ router.post("/generate", async (req, res) => {
                 room: "Seminar Hall"
               };
             } else {
+              // Genuinely Free Period (NEVER TUT or MENTOR!)
               classGrid[ck][day][p] = {
                 period: p,
                 time: timings[p] || DEFAULT_TIMINGS[p],
-                subjectCode: p === 1 ? "TUT" : "MENTOR",
-                subjectName: p === 1 ? "Technical Tutorial & Self-Study" : "Mentoring & Student Counseling",
-                shortName: p === 1 ? "TUT" : "MENTOR",
+                subjectCode: "FREE",
+                subjectName: "Free Period",
+                shortName: "Free",
                 facultyName: "-",
                 facultyNames: [],
-                type: p === 1 ? "Tutorial" : "Mentoring",
-                difficulty: "Light",
-                room: "LH-1"
+                type: "Free",
+                difficulty: "Normal",
+                room: "-"
               };
             }
           }
@@ -2783,6 +2883,34 @@ const healScheduleFreeSlots = async (schedule, department) => {
 
   let modified = false;
 
+  // Clean any legacy "TUT" or "MENTOR" placeholder slots to clean "Free" so Pass 1 can claim them for actual subjects
+  schedule.classes.forEach(cls => {
+    DAYS.forEach(day => {
+      const slots = cls.days?.[day] || [];
+      slots.forEach((s, idx) => {
+        if (s) {
+          const sc = (s.subjectCode || "").toUpperCase();
+          const sn = (s.shortName || "").toUpperCase();
+          if (sc === "TUT" || sn === "TUT" || sc === "MENTOR" || sn === "MENTOR") {
+            slots[idx] = {
+              period: s.period || (idx + 1),
+              time: s.time || DEFAULT_TIMINGS[s.period || (idx + 1)],
+              subjectCode: "FREE",
+              subjectName: "Free Period",
+              shortName: "Free",
+              facultyName: "-",
+              facultyNames: [],
+              type: "Free",
+              difficulty: "Normal",
+              room: "-"
+            };
+            modified = true;
+          }
+        }
+      });
+    });
+  });
+
   // Build current busy faculty matrix across all classes
   const busyFac = {};
   DAYS.forEach(d => {
@@ -2960,6 +3088,131 @@ const healScheduleFreeSlots = async (schedule, department) => {
           break; // Spread to next day
         }
       }
+
+      // SWAP REPAIR: If direct placement into any free slot failed (e.g. cand faculty is senior admin HOD/ASP blocked from morning P1-P2)
+      if (defItem.deficit > 0) {
+        for (const targetDay of DAYS) {
+          if (defItem.deficit <= 0) break;
+          const targetDayArr = cls.days?.[targetDay] || [];
+
+          for (let tpIdx = 0; tpIdx < targetDayArr.length; tpIdx++) {
+            if (defItem.deficit <= 0) break;
+            const targetSlot = targetDayArr[tpIdx];
+            if (targetSlot && targetSlot.isPinned) continue;
+            const targetP = targetSlot?.period || (tpIdx + 1);
+
+            const isFree = !targetSlot || targetSlot.type === "Free" || targetSlot.subjectCode === "FREE" || targetSlot.shortName === "FREE";
+            let isReplaceable = false;
+            if (!isFree && targetSlot) {
+              const sc = (targetSlot.shortName || targetSlot.subjectCode || "").toUpperCase();
+              if (sc === "OE" || targetSlot.type === "Library" || targetSlot.type === "Seminar" || sc === "LIB" || sc === "SEM") {
+                isReplaceable = true;
+              }
+            }
+            if (!isFree && !isReplaceable) continue;
+
+            // Search for donor slot in this class
+            for (const donorDay of DAYS) {
+              if (defItem.deficit <= 0) break;
+              const donorDayArr = cls.days?.[donorDay] || [];
+
+              for (let dpIdx = 0; dpIdx < donorDayArr.length; dpIdx++) {
+                if (donorDay === targetDay && dpIdx === tpIdx) continue;
+                const donorSlot = donorDayArr[dpIdx];
+                if (!donorSlot || donorSlot.isPinned) continue;
+                if (donorSlot.isTraining || isBlockType(donorSlot.type)) continue;
+                if (donorSlot.type === "Free" || donorSlot.subjectCode === "FREE") continue;
+                if (isSameSubjectSlot(donorSlot, cand)) continue;
+
+                const donorP = donorSlot.period || (dpIdx + 1);
+                const donorFacs = donorSlot.facultyNames || (donorSlot.facultyName ? [donorSlot.facultyName] : []);
+                const donorFac = donorFacs[0] || "";
+
+                // Check 1: Can donorSlot move to (targetDay, targetP)?
+                if (donorFac && donorFac !== "-") {
+                  busyFac[donorDay][donorP]?.delete(donorFac.toLowerCase());
+                }
+
+                const donorCanMove = (() => {
+                  if (donorFac && donorFac !== "-") {
+                    if (targetP <= 2 && isSeniorAdminFaculty(donorFac, staffMap)) return false;
+                    if (busyFac[targetDay][targetP]?.has(donorFac.toLowerCase())) return false;
+                    if (targetP > 1 && busyFac[targetDay][targetP - 1]?.has(donorFac.toLowerCase())) return false;
+                    if (targetP < 7 && busyFac[targetDay][targetP + 1]?.has(donorFac.toLowerCase())) return false;
+                    if (targetP === 4 && busyFac[targetDay][5]?.has(donorFac.toLowerCase())) return false;
+                    if (targetP === 5 && busyFac[targetDay][4]?.has(donorFac.toLowerCase())) return false;
+                  }
+                  if (targetP === 1 && !isPureTheorySubject(donorSlot)) return false;
+                  if (targetP === 7 && isMathsOrToughSubject(donorSlot)) return false;
+                  const left = targetDayArr.find(x => x.period === targetP - 1);
+                  const right = targetDayArr.find(x => x.period === targetP + 1);
+                  if ((left && isSameSubjectSlot(left, donorSlot)) || (right && isSameSubjectSlot(right, donorSlot))) return false;
+                  const timesOnTarget = targetDayArr.filter(x => x.period !== targetP && isSameSubjectSlot(x, donorSlot)).length;
+                  if (timesOnTarget >= 2) return false;
+                  return true;
+                })();
+
+                // Check 2: Can cand take (donorDay, donorP)?
+                const candCanTake = (() => {
+                  if (!donorCanMove) return false;
+                  if (fac && fac !== "-") {
+                    if (donorP <= 2 && isSeniorAdminFaculty(fac, staffMap)) return false;
+                    if (busyFac[donorDay][donorP]?.has(fac.toLowerCase())) return false;
+                    if (donorP > 1 && busyFac[donorDay][donorP - 1]?.has(fac.toLowerCase())) return false;
+                    if (donorP < 7 && busyFac[donorDay][donorP + 1]?.has(fac.toLowerCase())) return false;
+                    if (donorP === 4 && busyFac[donorDay][5]?.has(fac.toLowerCase())) return false;
+                    if (donorP === 5 && busyFac[donorDay][4]?.has(fac.toLowerCase())) return false;
+                  }
+                  if (donorP === 1 && !isPureTheorySubject(cand)) return false;
+                  if (donorP === 7 && isMathsOrToughSubject(cand)) return false;
+                  const left = donorDayArr.find(x => x.period === donorP - 1);
+                  const right = donorDayArr.find(x => x.period === donorP + 1);
+                  if ((left && isSameSubjectSlot(left, cand)) || (right && isSameSubjectSlot(right, cand))) return false;
+                  const timesOnDonor = donorDayArr.filter(x => x.period !== donorP && isSameSubjectSlot(x, cand)).length;
+                  if (timesOnDonor >= 2) return false;
+                  return true;
+                })();
+
+                if (donorCanMove && candCanTake) {
+                  // Execute Swap!
+                  targetDayArr[tpIdx] = {
+                    ...donorSlot,
+                    period: targetP,
+                    time: targetSlot?.time || DEFAULT_TIMINGS[targetP]
+                  };
+                  if (donorFac && donorFac !== "-") {
+                    busyFac[targetDay][targetP]?.add(donorFac.toLowerCase());
+                  }
+
+                  donorDayArr[dpIdx] = {
+                    period: donorP,
+                    time: donorSlot?.time || DEFAULT_TIMINGS[donorP],
+                    subjectCode: cand.subjectCode || cand.code,
+                    subjectName: cand.subjectName || cand.name,
+                    shortName: cand.shortName || cand.subjectCode || cand.code,
+                    facultyName: fac || "-",
+                    facultyNames: fac ? [fac] : [],
+                    type: cand.type || "Theory",
+                    difficulty: cand.difficulty || "Normal",
+                    room: cand.type === "Library" ? "Library" : (cand.type === "Seminar" ? "Seminar Hall" : "LH-1")
+                  };
+                  if (fac && fac !== "-") {
+                    busyFac[donorDay][donorP]?.add(fac.toLowerCase());
+                  }
+
+                  defItem.deficit--;
+                  modified = true;
+                  break;
+                } else {
+                  if (donorFac && donorFac !== "-") {
+                    busyFac[donorDay][donorP]?.add(donorFac.toLowerCase());
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     });
   });
 
@@ -3109,14 +3362,14 @@ const healScheduleFreeSlots = async (schedule, department) => {
               chosen = {
                 period: p,
                 time: s?.time || DEFAULT_TIMINGS[p],
-                subjectCode: p === 1 ? "TUT" : "MENTOR",
-                subjectName: p === 1 ? "Technical Tutorial & Self-Study" : "Mentoring & Student Counseling",
-                shortName: p === 1 ? "TUT" : "MENTOR",
+                subjectCode: "FREE",
+                subjectName: "Free Period",
+                shortName: "Free",
                 facultyName: "-",
                 facultyNames: [],
-                type: p === 1 ? "Tutorial" : "Mentoring",
-                difficulty: "Light",
-                room: "LH-1"
+                type: "Free",
+                difficulty: "Normal",
+                room: "-"
               };
             }
           }
