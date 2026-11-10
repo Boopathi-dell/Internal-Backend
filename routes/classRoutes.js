@@ -1,7 +1,108 @@
 const express = require("express");
 const router = express.Router();
+const jwt = require("jsonwebtoken");
 const ClassData = require("../models/Class");
 const Roster = require("../models/Roster");
+
+const JWT_SECRET = "mec_result_system_secret_2025";
+
+// Enforce strict Administrator role for destructive bulk mark operations
+const requireStrictAdmin = (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).json({ error: "Authorization token required." });
+    const token = authHeader.split(" ")[1];
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded.role !== "admin") {
+      return res.status(403).json({ error: "Access denied. Only Administrator can clear subject marks." });
+    }
+    req.admin = decoded;
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: "Invalid or expired Admin token." });
+  }
+};
+
+const getGradePoint = (grade, system) => {
+  const g = String(grade).toUpperCase().trim();
+  if (system === "System 1") {
+    const map = { "S": 10, "A+": 9, "A": 8, "B+": 7, "B": 6.5, "C+": 6, "C": 5, "U": 0, "U*": 0 };
+    return map[g] !== undefined ? map[g] : 0;
+  }
+  const map = { "O": 10, "A+": 9, "A": 8, "B+": 7, "B": 6, "C": 5, "U": 0, "U*": 0 };
+  return map[g] !== undefined ? map[g] : 0;
+};
+
+// Recompute student totals, percentages, and pass/fail status uniformly
+const recalculateClassStudents = (cls, rawStudents) => {
+  const isESE = cls.examName === "ESE";
+  const subjectCount = (cls.subjects || []).length;
+  const maxTotal = isESE ? subjectCount * 10 : subjectCount * cls.markPerSubject;
+
+  return (rawStudents || []).map(s => {
+    const studentObj = typeof s.toObject === "function" ? s.toObject() : { ...s };
+    let total = 0;
+    let totalGradePoints = 0;
+    let totalCredits = 0;
+    let fail = false;
+
+    const marks = Array.isArray(studentObj.marks) ? [...studentObj.marks] : [];
+    while (marks.length < subjectCount) marks.push("");
+
+    marks.forEach((val, idx) => {
+      const strVal = String(val || "").toUpperCase().trim();
+      if (isESE) {
+        if (strVal === "AB" || strVal === "U" || strVal === "U*" || strVal === "FAIL") {
+          fail = true;
+        }
+        const gp = getGradePoint(strVal, cls.eseGradingSystem || "System 2");
+        const credits = (cls.courseDetails && cls.courseDetails[idx] && cls.courseDetails[idx].credits !== undefined)
+          ? Number(cls.courseDetails[idx].credits)
+          : 3;
+        totalGradePoints += (gp * credits);
+        totalCredits += credits;
+      } else {
+        if (strVal === "AB" || strVal === "A") {
+          fail = true;
+        } else {
+          const numVal = Number(strVal || 0);
+          total += (isNaN(numVal) ? 0 : numVal);
+          if (numVal < cls.passMark) fail = true;
+        }
+      }
+    });
+
+    let percentage = maxTotal > 0 ? (total / maxTotal) * 100 : 0;
+    if (isESE) {
+      total = totalCredits > 0 ? Number((totalGradePoints / totalCredits).toFixed(2)) : 0;
+      percentage = Math.round(total * 10);
+    }
+
+    return {
+      ...studentObj,
+      marks,
+      total,
+      percentage: Math.round(percentage),
+      result: fail ? "Fail" : "Pass"
+    };
+  });
+};
+
+const shouldClearMarkValue = (val, isESE, passMark, mode) => {
+  const strVal = String(val ?? "").toUpperCase().trim();
+  if (strVal === "") return false;
+  if (mode === "all") return true;
+  if (mode === "absent") return strVal === "AB" || strVal === "A";
+  if (mode === "fail") {
+    if (isESE) {
+      return ["AB", "A", "U", "U*", "FAIL", "RA", "SA", "W"].includes(strVal);
+    }
+    if (strVal === "AB" || strVal === "A") return true;
+    const numVal = Number(strVal);
+    return !isNaN(numVal) && numVal < Number(passMark);
+  }
+  return false;
+};
 
 const formatDate = (dateStr) => {
   if (!dateStr) return "";
@@ -599,67 +700,107 @@ router.post("/:className/marks", async (req, res) => {
       }
     }
 
-    const isESE = cls.examName === "ESE";
-    const maxTotal = isESE ? cls.subjects.length * 10 : cls.subjects.length * cls.markPerSubject;
-
-    const getGradePoint = (grade, system) => {
-      const g = String(grade).toUpperCase().trim();
-      if (system === "System 1") {
-        const map = { "S": 10, "A+": 9, "A": 8, "B+": 7, "B": 6.5, "C+": 6, "C": 5, "U": 0, "U*": 0 };
-        return map[g] !== undefined ? map[g] : 0;
-      } else {
-        const map = { "O": 10, "A+": 9, "A": 8, "B+": 7, "B": 6, "C": 5, "U": 0, "U*": 0 };
-        return map[g] !== undefined ? map[g] : 0;
-      }
-    };
-
-    const computedStudents = students.map(s => {
-      let total = 0;
-      let totalGradePoints = 0;
-      let totalCredits = 0;
-      let fail = false;
-
-      const marks = s.marks || [];
-      marks.forEach((val, idx) => {
-        const strVal = String(val || "").toUpperCase().trim();
-        if (isESE) {
-          if (strVal === "AB" || strVal === "U" || strVal === "U*" || strVal === "FAIL") {
-             fail = true;
-          }
-          const gp = getGradePoint(strVal, cls.eseGradingSystem || "System 2");
-          const credits = (cls.courseDetails && cls.courseDetails[idx] && cls.courseDetails[idx].credits !== undefined) ? Number(cls.courseDetails[idx].credits) : 3;
-          totalGradePoints += (gp * credits);
-          totalCredits += credits;
-        } else {
-          if (strVal === "AB" || strVal === "A") {
-             fail = true;
-          } else {
-            const numVal = Number(strVal || 0);
-            total += (isNaN(numVal) ? 0 : numVal);
-            if (numVal < cls.passMark) fail = true;
-          }
-        }
-      });
-
-      let percentage = maxTotal > 0 ? (total / maxTotal) * 100 : 0;
-      if (isESE) {
-        total = totalCredits > 0 ? Number((totalGradePoints / totalCredits).toFixed(2)) : 0;
-        percentage = Math.round(total * 10);
-      }
-
-      return {
-        ...s,
-        marks: marks,
-        total,
-        percentage: Math.round(percentage),
-        result: fail ? "Fail" : "Pass"
-      };
-    });
-
-    cls.students = computedStudents;
+    cls.students = recalculateClassStudents(cls, students);
     await cls.save();
     
     res.json(cls);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ADMIN ONLY: CLEAR MARKS FOR A SINGLE SUBJECT COLUMN (all / absent / fail)
+router.post("/:className/clear-subject-marks", requireStrictAdmin, async (req, res) => {
+  try {
+    const { subjectIndex, mode = "all" } = req.body;
+    const cls = await ClassData.findOne({ className: req.params.className, isDeleted: { $ne: true } });
+    if (!cls) return res.status(404).json({ error: "Class not found." });
+
+    const idx = Number(subjectIndex);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= (cls.subjects || []).length) {
+      return res.status(400).json({ error: "Invalid subject selection." });
+    }
+    if (!["all", "absent", "fail"].includes(mode)) {
+      return res.status(400).json({ error: "Invalid clear mode specified." });
+    }
+
+    const isESE = cls.examName === "ESE";
+    const subjectCount = (cls.subjects || []).length;
+    const backupMarksByRegNo = {};
+    let clearedCount = 0;
+
+    const updatedStudents = (cls.students || []).map(s => {
+      const studentObj = typeof s.toObject === "function" ? s.toObject() : { ...s };
+      const marks = Array.isArray(studentObj.marks) ? [...studentObj.marks] : [];
+      while (marks.length < subjectCount) marks.push("");
+
+      const currentVal = marks[idx];
+      if (shouldClearMarkValue(currentVal, isESE, cls.passMark, mode)) {
+        if (studentObj.regNo) {
+          backupMarksByRegNo[studentObj.regNo] = currentVal;
+        }
+        marks[idx] = "";
+        clearedCount++;
+      }
+      return { ...studentObj, marks };
+    });
+
+    cls.students = recalculateClassStudents(cls, updatedStudents);
+    await cls.save();
+
+    res.json({
+      success: true,
+      clearedCount,
+      mode,
+      subjectIndex: idx,
+      subjectCode: cls.subjects[idx],
+      backupMarksByRegNo,
+      classData: cls
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ADMIN ONLY: RESTORE MARKS FOR A SINGLE SUBJECT COLUMN (1-Click Undo)
+router.post("/:className/restore-subject-marks", requireStrictAdmin, async (req, res) => {
+  try {
+    const { subjectIndex, marksByRegNo } = req.body;
+    const cls = await ClassData.findOne({ className: req.params.className, isDeleted: { $ne: true } });
+    if (!cls) return res.status(404).json({ error: "Class not found." });
+
+    const idx = Number(subjectIndex);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= (cls.subjects || []).length) {
+      return res.status(400).json({ error: "Invalid subject selection." });
+    }
+    if (!marksByRegNo || typeof marksByRegNo !== "object") {
+      return res.status(400).json({ error: "Backup marks map is required." });
+    }
+
+    const subjectCount = (cls.subjects || []).length;
+    let restoredCount = 0;
+
+    const updatedStudents = (cls.students || []).map(s => {
+      const studentObj = typeof s.toObject === "function" ? s.toObject() : { ...s };
+      const marks = Array.isArray(studentObj.marks) ? [...studentObj.marks] : [];
+      while (marks.length < subjectCount) marks.push("");
+
+      if (studentObj.regNo && Object.prototype.hasOwnProperty.call(marksByRegNo, studentObj.regNo)) {
+        marks[idx] = marksByRegNo[studentObj.regNo];
+        restoredCount++;
+      }
+      return { ...studentObj, marks };
+    });
+
+    cls.students = recalculateClassStudents(cls, updatedStudents);
+    await cls.save();
+
+    res.json({
+      success: true,
+      restoredCount,
+      subjectIndex: idx,
+      classData: cls
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
