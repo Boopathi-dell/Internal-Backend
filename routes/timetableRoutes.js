@@ -173,6 +173,15 @@ const isSameSubjectSlot = (slot, allocItem) => {
     }
   }
 
+  // 3. Match Library and Seminar by type or abbreviation
+  const isAllocLib = (allocItem.type || "").toLowerCase().includes("lib") || allocCode.includes("LIB") || allocShort.includes("LIB");
+  const isSlotLib = (slot.type || "").toLowerCase().includes("lib") || slotCode.includes("LIB") || slotShort.includes("LIB");
+  if (isAllocLib && isSlotLib) return true;
+
+  const isAllocSem = (allocItem.type || "").toLowerCase().includes("sem") || allocCode.includes("SEM") || allocShort.includes("SEM");
+  const isSlotSem = (slot.type || "").toLowerCase().includes("sem") || slotCode.includes("SEM") || slotShort.includes("SEM");
+  if (isAllocSem && isSlotSem) return true;
+
   return false;
 };
 
@@ -2489,11 +2498,20 @@ router.post("/generate", async (req, res) => {
             const libItem = clsAllocations.find(a => (a.type || "").toLowerCase().includes("lib") || (a.subjectName || "").toLowerCase().includes("lib") || (a.shortName || "").toLowerCase().includes("lib"));
             const semItem = clsAllocations.find(a => (a.type || "").toLowerCase().includes("sem") || (a.subjectName || "").toLowerCase().includes("sem") || (a.shortName || "").toLowerCase().includes("sem"));
 
+            // Calculate weekly placed count (NEVER exceed user's allocated hoursPerWeek!)
+            const libPlacedTotal = libItem ? DAYS.reduce((acc, d) => acc + PERIODS.filter(pr => classGrid[ck][d][pr] && isSameSubjectSlot(classGrid[ck][d][pr], libItem)).length, 0) : 0;
+            const libMaxAllowed = libItem ? (Number(libItem.hoursPerWeek) || 1) : 0;
+            const canTakeLib = libItem && libPlacedTotal < libMaxAllowed;
+
+            const semPlacedTotal = semItem ? DAYS.reduce((acc, d) => acc + PERIODS.filter(pr => classGrid[ck][d][pr] && isSameSubjectSlot(classGrid[ck][d][pr], semItem)).length, 0) : 0;
+            const semMaxAllowed = semItem ? (Number(semItem.hoursPerWeek) || 1) : 0;
+            const canTakeSem = semItem && semPlacedTotal < semMaxAllowed;
+
             const hasLibToday = PERIODS.some(pr => classGrid[ck][day][pr]?.type === "Library" || classGrid[ck][day][pr]?.shortName === "LIB");
             const hasSemToday = PERIODS.some(pr => classGrid[ck][day][pr]?.type === "Seminar" || classGrid[ck][day][pr]?.shortName === "SEM");
 
             // STRICT USER RULE 2: Seminar and Library must NEVER appear in Period 1!
-            if (p !== 1 && !hasLibToday && libItem) {
+            if (p !== 1 && !hasLibToday && canTakeLib) {
               classGrid[ck][day][p] = {
                 period: p,
                 time: timings[p] || DEFAULT_TIMINGS[p],
@@ -2506,7 +2524,7 @@ router.post("/generate", async (req, res) => {
                 difficulty: "Light",
                 room: "Library"
               };
-            } else if (p !== 1 && !hasSemToday && semItem) {
+            } else if (p !== 1 && !hasSemToday && canTakeSem) {
               classGrid[ck][day][p] = {
                 period: p,
                 time: timings[p] || DEFAULT_TIMINGS[p],
@@ -2772,12 +2790,13 @@ const sanitizeExcessSubjectHours = async (schedule, department) => {
     });
 
     classAllocs.forEach(allocItem => {
-      const subjCode = allocItem.subjectCode || allocItem.code;
-      if (!subjCode || subjCode === "FREE" || subjCode === "LIB" || subjCode === "SEM" || subjCode === "MENTOR") {
+      const subjCode = allocItem.subjectCode || allocItem.code || allocItem.shortName;
+      if (!subjCode || subjCode === "FREE" || subjCode === "MENTOR") {
         return;
       }
 
-      const maxAllowed = Number(allocItem.hoursPerWeek) || 4;
+      const isSpecialType = (allocItem.type || "").toLowerCase().includes("lib") || (allocItem.type || "").toLowerCase().includes("sem");
+      const maxAllowed = Number(allocItem.hoursPerWeek) || (isSpecialType ? 1 : 4);
 
       // Find all slots with this subject in the class using strict subject matching
       const placedSlots = [];
@@ -3326,32 +3345,50 @@ const healScheduleFreeSlots = async (schedule, department) => {
             break;
           }
 
-          // 2. Fallback to Seminar, Library, or Mentoring
+          // 2. Fallback to Seminar or Library ONLY IF allocated and under weekly quota
           if (!chosen) {
-            const hasLib = slots.some(x => x.type === "Library" || x.shortName === "LIB");
-            const hasSem = slots.some(x => x.type === "Seminar" || x.shortName === "SEM");
+            const semItem = classAllocs.find(a => (a.type || "").toLowerCase().includes("sem") || (a.subjectName || "").toLowerCase().includes("sem") || (a.shortName || "").toLowerCase().includes("sem"));
+            const libItem = classAllocs.find(a => (a.type || "").toLowerCase().includes("lib") || (a.subjectName || "").toLowerCase().includes("lib") || (a.shortName || "").toLowerCase().includes("lib"));
+
+            let semPlacedTotal = 0;
+            let libPlacedTotal = 0;
+            DAYS.forEach(d => {
+              (cls.days?.[d] || []).forEach(x => {
+                if (!x) return;
+                if (semItem && isSameSubjectSlot(x, semItem)) semPlacedTotal++;
+                else if (x.type === "Seminar" || (x.shortName || "").toUpperCase() === "SEM") semPlacedTotal++;
+                if (libItem && isSameSubjectSlot(x, libItem)) libPlacedTotal++;
+                else if (x.type === "Library" || (x.shortName || "").toUpperCase() === "LIB") libPlacedTotal++;
+              });
+            });
+
+            const semMaxAllowed = semItem ? (Number(semItem.hoursPerWeek) || 1) : 0;
+            const libMaxAllowed = libItem ? (Number(libItem.hoursPerWeek) || 1) : 0;
+
+            const hasSemToday = slots.some(x => x && (x.type === "Seminar" || (x.shortName || "").toUpperCase() === "SEM"));
+            const hasLibToday = slots.some(x => x && (x.type === "Library" || (x.shortName || "").toUpperCase() === "LIB"));
 
             // STRICT USER RULE 2: Seminar and Library must NEVER appear in Period 1!
-            if (p !== 1 && !hasSem) {
+            if (p !== 1 && !hasSemToday && semItem && semPlacedTotal < semMaxAllowed) {
               chosen = {
                 period: p,
                 time: s?.time || DEFAULT_TIMINGS[p],
-                subjectCode: "SEM",
-                subjectName: "Seminar / Technical Presentation",
-                shortName: "SEM",
+                subjectCode: semItem.subjectCode || "SEM",
+                subjectName: semItem.subjectName || "Seminar / Technical Presentation",
+                shortName: semItem.shortName || "SEM",
                 facultyName: "-",
                 facultyNames: [],
                 type: "Seminar",
                 difficulty: "Light",
                 room: "Seminar Hall"
               };
-            } else if (p !== 1 && !hasLib) {
+            } else if (p !== 1 && !hasLibToday && libItem && libPlacedTotal < libMaxAllowed) {
               chosen = {
                 period: p,
                 time: s?.time || DEFAULT_TIMINGS[p],
-                subjectCode: "LIB",
-                subjectName: "Library / Digital Library",
-                shortName: "LIB",
+                subjectCode: libItem.subjectCode || "LIB",
+                subjectName: libItem.subjectName || "Library / Digital Library",
+                shortName: libItem.shortName || "LIB",
                 facultyName: "-",
                 facultyNames: [],
                 type: "Library",
