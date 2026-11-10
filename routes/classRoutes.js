@@ -32,15 +32,23 @@ router.get("/migrate/assignments", async (req, res) => {
 // GET ALL CLASSES
 router.get("/", async (req, res) => {
   try {
-    const { deletedOnly } = req.query;
+    const { deletedOnly, department, yearSemSec } = req.query;
     
-    // Auto-cleanup items older than 30 days
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    await ClassData.deleteMany({ isDeleted: true, deletedAt: { $lt: thirtyDaysAgo } });
+    // Background cleanup without blocking read responses
+    if (Math.random() < 0.05) {
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      ClassData.deleteMany({ isDeleted: true, deletedAt: { $lt: thirtyDaysAgo } }).catch(() => {});
+    }
 
     let query = { isDeleted: { $ne: true } };
     if (deletedOnly === "true") {
       query = { isDeleted: true };
+    }
+    if (department) {
+      query.department = department;
+    }
+    if (yearSemSec) {
+      query.yearSemSec = yearSemSec;
     }
 
     const classes = await ClassData.find(query);

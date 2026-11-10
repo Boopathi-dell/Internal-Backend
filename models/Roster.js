@@ -18,4 +18,6 @@ const rosterSchema = new mongoose.Schema({
   students: { type: [studentRosterSchema], default: [] },
 }, { timestamps: true });
 
+rosterSchema.index({ department: 1, year: 1, semester: 1, section: 1 });
+
 module.exports = mongoose.model("Roster", rosterSchema);

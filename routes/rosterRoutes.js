@@ -5,10 +5,17 @@ const DailyAttendance = require("../models/DailyAttendance");
 
 const router = express.Router();
 
-// Get all rosters
+// Get all rosters (with optional cohort or section filtering)
 router.get("/", async (req, res) => {
   try {
-    const rosters = await Roster.find();
+    const { department, year, semester, section } = req.query;
+    const query = {};
+    if (department) query.department = department;
+    if (year) query.year = year;
+    if (semester) query.semester = semester;
+    if (section) query.section = section;
+
+    const rosters = await Roster.find(query);
     res.json(rosters);
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch rosters" });

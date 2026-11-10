@@ -56,4 +56,6 @@ const classSchema = new mongoose.Schema({
   deletedAt: { type: Date, default: null }
 });
 
+classSchema.index({ department: 1, yearSemSec: 1, isDeleted: 1 });
+
 module.exports = mongoose.model("Class", classSchema);
