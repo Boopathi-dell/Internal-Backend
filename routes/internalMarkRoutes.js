@@ -13,14 +13,49 @@ router.get("/", async (req, res) => {
   }
 });
 
-// Get active template
+const normalizeCategory = (val) => (val === "Lab" ? "Lab" : "Theory");
+
+const normalizeOrientation = (val, category) => {
+  if (val === "portrait" || val === "landscape") return val;
+  return category === "Lab" ? "portrait" : "landscape";
+};
+
+const buildCategoryFilter = (category) => {
+  if (category === "Lab") {
+    return { courseCategory: "Lab" };
+  }
+  return {
+    $or: [
+      { courseCategory: "Theory" },
+      { courseCategory: { $exists: false } },
+      { courseCategory: null },
+      { courseCategory: "" }
+    ]
+  };
+};
+
+// Deactivate sibling templates only within the same (regulation + courseCategory) slot so Theory and Lab can both remain Active
+const deactivateSiblingTemplates = async (isActive, regulation, courseCategory, excludeId = null) => {
+  if (!isActive) return;
+  const filter = {
+    ...(regulation ? { regulation } : {}),
+    ...buildCategoryFilter(courseCategory),
+    ...(excludeId ? { _id: { $ne: excludeId } } : {})
+  };
+  await InternalMarkTemplate.updateMany(filter, { isActive: false });
+};
+
+// Get active template (optionally filtered by regulation and category: Theory | Lab)
 router.get("/active", async (req, res) => {
   try {
     res.set("Cache-Control", "no-store");
-    const regulation = req.query.regulation;
+    const { regulation, category } = req.query;
     const query = { isActive: true };
     if (regulation) {
       query.regulation = regulation;
+    }
+    if (category) {
+      Object.assign(query, buildCategoryFilter(normalizeCategory(category)));
     }
     const template = await InternalMarkTemplate.findOne(query);
     res.json(template);
@@ -60,15 +95,17 @@ const normalizePassMark = (val) => {
 // Create new template
 router.post("/", async (req, res) => {
   try {
-    const { templateName, regulation, passMark, columns, isActive, headerImage } = req.body;
-    if (isActive && regulation) {
-      await InternalMarkTemplate.updateMany({ regulation }, { isActive: false });
-    } else if (isActive) {
-      await InternalMarkTemplate.updateMany({}, { isActive: false });
-    }
+    const { templateName, regulation, courseCategory, printOrientation, passMark, columns, isActive, headerImage } = req.body;
+    const category = normalizeCategory(courseCategory);
+    const orientation = normalizeOrientation(printOrientation, category);
+
+    await deactivateSiblingTemplates(isActive, regulation, category);
+
     const newTemplate = new InternalMarkTemplate({ 
       templateName, 
-      regulation, 
+      regulation,
+      courseCategory: category,
+      printOrientation: orientation,
       passMark: normalizePassMark(passMark),
       columns, 
       isActive,
@@ -85,15 +122,17 @@ router.post("/", async (req, res) => {
 // Update template
 router.put("/:id", async (req, res) => {
   try {
-    const { templateName, regulation, passMark, columns, isActive, headerImage } = req.body;
-    if (isActive && regulation) {
-      await InternalMarkTemplate.updateMany({ regulation }, { isActive: false });
-    } else if (isActive) {
-      await InternalMarkTemplate.updateMany({}, { isActive: false });
-    }
+    const { templateName, regulation, courseCategory, printOrientation, passMark, columns, isActive, headerImage } = req.body;
+    const category = normalizeCategory(courseCategory);
+    const orientation = normalizeOrientation(printOrientation, category);
+
+    await deactivateSiblingTemplates(isActive, regulation, category, req.params.id);
+
     const updateDoc = {
       templateName,
       regulation,
+      courseCategory: category,
+      printOrientation: orientation,
       columns,
       isActive,
       updatedAt: new Date(),

@@ -16,6 +16,8 @@ const columnSchema = new mongoose.Schema({
 const internalMarkTemplateSchema = new mongoose.Schema({
   templateName: { type: String, required: true },
   regulation: { type: String, required: true },
+  courseCategory: { type: String, enum: ["Theory", "Lab"], default: "Theory" },
+  printOrientation: { type: String, enum: ["landscape", "portrait"], default: "landscape" },
   passMark: { type: Number, default: 0 },
   isActive: { type: Boolean, default: true },
   headerImage: { type: String, default: "" },
