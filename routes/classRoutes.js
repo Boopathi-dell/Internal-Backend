@@ -112,20 +112,49 @@ const formatDate = (dateStr) => {
   return `${day}-${month}-${year}`;
 };
 
+// Remap existing marks from old subject codes to new subject codes so changing/adding subjects never misaligns or copies across exams
+const remapStudentMarksBySubject = (oldSubjects = [], newSubjects = [], oldMarks = []) => {
+  const normalizedOld = (oldSubjects || []).map(c => String(c || "").trim().toUpperCase());
+  const normalizedNew = (newSubjects || []).map(c => String(c || "").trim().toUpperCase());
+  const sourceMarks = Array.isArray(oldMarks) ? oldMarks : [];
+
+  if (normalizedNew.length === 0) return [];
+  if (
+    normalizedOld.length === normalizedNew.length &&
+    normalizedOld.every((code, idx) => code && code === normalizedNew[idx])
+  ) {
+    return normalizedNew.map((_, idx) => (sourceMarks[idx] !== undefined ? sourceMarks[idx] : ""));
+  }
+
+  return normalizedNew.map((newCode) => {
+    if (!newCode) return "";
+    const oldIdx = normalizedOld.indexOf(newCode);
+    return (oldIdx !== -1 && sourceMarks[oldIdx] !== undefined) ? sourceMarks[oldIdx] : "";
+  });
+};
+
 // Merge incoming roster entries while preserving existing marks arrays without Mongoose __v version conflicts
-const mergeCohortStudents = (existingStudents = [], incomingStudents = [], subjectCount = 0, { acceptIncomingMarks = false } = {}) => {
+const mergeCohortStudents = (
+  existingStudents = [],
+  incomingStudents = [],
+  subjectCount = 0,
+  { acceptIncomingMarks = false, existingSubjects = null, targetSubjects = null } = {}
+) => {
   return (incomingStudents || []).map(newStudent => {
     const incomingObj = typeof newStudent.toObject === "function" ? newStudent.toObject() : { ...newStudent };
     const existing = existingStudents.find(s => s.regNo === incomingObj.regNo);
     const emptyMarks = Array(subjectCount).fill("");
     if (existing) {
       const existingObj = typeof existing.toObject === "function" ? existing.toObject() : { ...existing };
-      const marks = (acceptIncomingMarks && incomingObj.marks && incomingObj.marks.length > 0)
-        ? incomingObj.marks
-        : (existingObj.marks || emptyMarks);
-      const dob = acceptIncomingMarks
-        ? (incomingObj.dob !== undefined ? incomingObj.dob : existingObj.dob)
-        : (incomingObj.dob || existingObj.dob);
+      let marks;
+      if (acceptIncomingMarks && incomingObj.marks && incomingObj.marks.length > 0) {
+        marks = incomingObj.marks;
+      } else if (Array.isArray(existingSubjects) && Array.isArray(targetSubjects)) {
+        marks = remapStudentMarksBySubject(existingSubjects, targetSubjects, existingObj.marks);
+      } else {
+        marks = existingObj.marks || emptyMarks;
+      }
+      const dob = incomingObj.dob !== undefined && incomingObj.dob !== "" ? incomingObj.dob : existingObj.dob;
       return {
         ...existingObj,
         name: incomingObj.name,
@@ -160,12 +189,13 @@ const createClassSafely = async (docFields) => {
   }
 };
 
-// Propagate student roster (and optional course details) across all exams for the same section
-const propagateRosterToCohort = async (baseClass, roster, newCourseDetails) => {
+// Propagate student roster ONLY across all exams for the same section (never overwrite another exam's subjects or marks)
+const propagateRosterToCohort = async (baseClass, roster) => {
   const otherClasses = await ClassData.find({
     programme: baseClass.programme,
     department: baseClass.department,
     yearSemSec: baseClass.yearSemSec,
+    isDeleted: { $ne: true },
     _id: { $ne: baseClass._id }
   });
 
@@ -173,10 +203,6 @@ const propagateRosterToCohort = async (baseClass, roster, newCourseDetails) => {
     const updateFields = {
       students: mergeCohortStudents(otherCls.students, roster, (otherCls.subjects || []).length)
     };
-    if (newCourseDetails && newCourseDetails.length > 0) {
-      updateFields.courseDetails = newCourseDetails;
-      updateFields.subjects = newCourseDetails.map(cd => cd.courseCode || "");
-    }
     await ClassData.findByIdAndUpdate(otherCls._id, { $set: updateFields }, { new: true });
   }
 };
@@ -481,6 +507,8 @@ router.post("/bulk-clone", async (req, res) => {
       const subjects = mappedCourses.map(c => c.courseCode || "");
 
       // Determine students roster (prefers Master Roster for target section; preserves source students for source section)
+      // IMPORTANT: Never copy marks across DIFFERENT exams (e.g. LAB OBSERVATION MARKS -> CIA - I)
+      const isSameExamAsSource = Boolean(sourceExam && targetExam.toLowerCase() === sourceExam.toLowerCase());
       let targetStudents = [];
       if (isSourceSec && sourceStudents.length > 0) {
         targetStudents = sourceStudents.map(s => ({
@@ -489,7 +517,7 @@ router.post("/bulk-clone", async (req, res) => {
           gender: s.gender || "Boy",
           studentType: s.studentType || "Day Scholar",
           dob: s.dob || "",
-          marks: (s.marks && s.marks.length === subjects.length) ? s.marks : Array(subjects.length).fill("")
+          marks: (isSameExamAsSource && s.marks && s.marks.length === subjects.length) ? s.marks : Array(subjects.length).fill("")
         }));
       } else {
         const cohortName = `${prog}-${dept} - ${yearSemSec}`;
@@ -541,7 +569,7 @@ router.post("/bulk-clone", async (req, res) => {
             if (old) {
               return {
                 ...newS,
-                marks: (old.marks && old.marks.length === subjects.length) ? old.marks : Array(subjects.length).fill("")
+                marks: remapStudentMarksBySubject(cls.subjects || [], subjects, old.marks || [])
               };
             }
             return newS;
@@ -623,14 +651,18 @@ router.post("/", async (req, res) => {
     let savedClass;
 
     if (existingCls) {
-      // Update existing atomically via $set so concurrent edits / double-saves never trigger VersionError
+      // Update existing atomically via $set; preserve DB marks aligned by course code (never overwrite from Class Setup state)
       const updateFields = {
         subjects,
         passMark,
         examName,
         markPerSubject,
         isDeleted: false,
-        students: mergeCohortStudents(existingCls.students, students, subjects.length, { acceptIncomingMarks: true })
+        students: mergeCohortStudents(existingCls.students, students, subjects.length, {
+          acceptIncomingMarks: false,
+          existingSubjects: existingCls.subjects || [],
+          targetSubjects: subjects || []
+        })
       };
       if (courseDetails) updateFields.courseDetails = courseDetails;
       if (targetPassPercentage) updateFields.targetPassPercentage = targetPassPercentage;
@@ -651,10 +683,14 @@ router.post("/", async (req, res) => {
         { new: true }
       );
     } else {
-      // Create new safely (handles concurrent creation races via duplicate-key atomic fallback)
+      // Create new safely; always initialize fresh empty marks so no previous exam's marks leak in
       const sList = (students || []).map(s => ({
-        ...s,
-        marks: (s.marks && s.marks.length > 0) ? s.marks : Array(subjects.length).fill("")
+        regNo: s.regNo,
+        name: s.name,
+        dob: s.dob || "",
+        gender: s.gender || "Boy",
+        studentType: s.studentType || "Day Scholar",
+        marks: Array(subjects.length).fill("")
       }));
       savedClass = await createClassSafely({
         className,
@@ -679,7 +715,7 @@ router.post("/", async (req, res) => {
     }
 
     if (propagateRoster && savedClass) {
-      await propagateRosterToCohort(savedClass, students, courseDetails);
+      await propagateRosterToCohort(savedClass, students);
     }
 
     if (propagateToYearSem && savedClass) {
