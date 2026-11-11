@@ -529,22 +529,30 @@ router.get("/student/results", async (req, res) => {
     // Process results grouped by examName or className
     const results = classes.map(cls => {
       // Find the specific student in this class
-      const student = cls.students.find(s => s.regNo === regNo);
+      const student = (cls.students || []).find(s => String(s.regNo || "").trim().toUpperCase() === regNo);
+      if (!student) return null;
+
+      const marksArr = Array.isArray(student.marks) ? student.marks : [];
+      const subjList = Array.isArray(cls.subjects) ? cls.subjects : [];
+      const detailsList = Array.isArray(cls.courseDetails) ? cls.courseDetails : [];
 
       // Map marks to subjects
-      const subjectMarks = cls.subjects.map((subjCode, index) => {
+      const subjectMarks = subjList.map((subjCode, index) => {
         // find subject details in courseDetails if it exists
-        const details = cls.courseDetails.find(cd => cd.courseCode === subjCode);
+        const details = detailsList.find(cd => cd.courseCode === subjCode);
         return {
           courseCode: subjCode,
           courseName: details ? details.courseName : "",
           shortName: details ? details.shortName : "",
           facultyName: details ? details.facultyName : "",
-          mark: student.marks[index] !== undefined ? student.marks[index] : "",
+          mark: marksArr[index] !== undefined ? marksArr[index] : "",
           passMark: cls.passMark,
           markPerSubject: cls.markPerSubject
         };
       });
+
+      const safePct = Number(student.percentage);
+      const safeTotal = Number(student.total);
 
       return {
         className: cls.className,
@@ -555,15 +563,15 @@ router.get("/student/results", async (req, res) => {
         date: cls.date,
         passMark: cls.passMark,
         markPerSubject: cls.markPerSubject,
-        studentName: student.name,
+        studentName: student.name || decoded.name || "",
         gender: student.gender,
         studentType: student.studentType,
         marks: subjectMarks,
-        total: student.total,
-        percentage: student.percentage,
-        result: student.result
+        total: Number.isFinite(safeTotal) ? safeTotal : 0,
+        percentage: Number.isFinite(safePct) ? safePct : 0,
+        result: student.result || "-"
       };
-    });
+    }).filter(Boolean);
 
     let attendancePercentage = null;
 
