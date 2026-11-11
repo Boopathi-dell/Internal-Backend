@@ -1,10 +1,15 @@
 const mongoose = require("mongoose");
 
 const columnSchema = new mongoose.Schema({
+  colKey: { type: String },
   heading: { type: String, required: true },
   type: { type: String, enum: ["exam", "formula"], required: true },
   examName: { type: String }, // e.g. 'UNIT I'
   formula: { type: String }, // e.g. '(#[UNIT I] + #[UNIT II] + #[CIA I]) / 110 * 10'
+  calcSources: { type: [String], default: undefined },
+  calcType: { type: String },
+  calcOutof: { type: Number },
+  calcWeightage: { type: Number },
   isHidden: { type: Boolean, default: false }
 });
 
