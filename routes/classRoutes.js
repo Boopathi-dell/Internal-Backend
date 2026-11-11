@@ -300,6 +300,7 @@ router.post("/bulk-clone", async (req, res) => {
   try {
     const {
       source,
+      includeSourceCurrentExam = true,
       targetExamsForSource = [],
       targetSections = []
     } = req.body;
@@ -308,42 +309,84 @@ router.post("/bulk-clone", async (req, res) => {
       return res.status(400).json({ error: "Source class configuration is required." });
     }
 
-    const prog = source.programme || "B.E";
-    const dept = source.department || "CSE";
-    const y = source.year;
-    const sem = source.semester;
-    const baseCourses = source.courseDetails || [];
+    const prog = String(source.programme || "B.E").trim();
+    const dept = String(source.department || "CSE").trim();
+    const y = String(source.year).trim();
+    const sem = String(source.semester).trim();
+    const sourceSec = String(source.section).trim();
+    const sourceExam = String(source.examName || "").trim();
+    const baseCourses = (source.courseDetails || []).map(c => ({
+      courseCode: String(c.courseCode || "").trim(),
+      courseName: String(c.courseName || "").trim(),
+      shortName: String(c.shortName || "").trim(),
+      facultyName: String(c.facultyName || "").trim(),
+      credits: c.credits !== undefined ? c.credits : 3
+    }));
     const sourceStudents = source.students || [];
 
     const getExamMarks = (exam) => {
-      const ex = String(exam || "").toLowerCase();
+      const exTrim = String(exam || "").trim();
+      const ex = exTrim.toLowerCase();
+      if (sourceExam && ex === sourceExam.toLowerCase() &&
+          source.passMark !== undefined && source.passMark !== "" &&
+          source.markPerSubject !== undefined && source.markPerSubject !== "") {
+        return {
+          passMark: Number(source.passMark) || 0,
+          markPerSubject: Number(source.markPerSubject) || 0
+        };
+      }
       if (ex.includes("unit test")) return { passMark: 15, markPerSubject: 30 };
-      if (ex === "cia - i" || ex === "cia - ii") return { passMark: 25, markPerSubject: 50 };
-      if (ex === "cia - iii" || ex === "ese") return { passMark: 50, markPerSubject: 100 };
+      if (ex === "cia - i" || ex === "cia - ii" || ex === "cia i" || ex === "cia ii") return { passMark: 25, markPerSubject: 50 };
+      if (ex === "cia - iii" || ex === "cia iii" || ex === "ese" || ex.includes("model")) return { passMark: 50, markPerSubject: 100 };
+      if (ex === "mkc") return { passMark: 3, markPerSubject: 5 };
       return { passMark: 50, markPerSubject: 100 };
     };
 
     const results = [];
 
-    const createOrUpdateClass = async (targetSec, targetExam, facultyMap = {}, isSourceSec = false) => {
+    const createOrUpdateClass = async (targetSecRaw, targetExamRaw, facultyMap = {}, isSourceSec = false, preserveExistingSectionFaculty = false) => {
+      const targetSec = String(targetSecRaw || "").trim();
+      const targetExam = String(targetExamRaw || "").trim();
+      if (!targetSec || !targetExam) return;
+
       const className = `${prog}-${dept} - ${y}/${sem}/${targetSec} - ${targetExam}`;
       const yearSemSec = `${y}/${sem}/${targetSec}`;
       const { passMark, markPerSubject } = getExamMarks(targetExam);
 
-      // Map courses and apply faculty overrides
+      // Load peer class for this cohort once if we need its roster or existing faculty assignments
+      const existingPeerForCohort = await ClassData.findOne({
+        programme: prog,
+        department: dept,
+        yearSemSec,
+        isDeleted: { $ne: true }
+      });
+
+      // Map courses and apply faculty overrides cleanly
       const mappedCourses = baseCourses.map(c => {
-        const customFac = facultyMap[c.courseCode] !== undefined ? facultyMap[c.courseCode] : c.facultyName;
+        let resolvedFac = "";
+        if (Object.prototype.hasOwnProperty.call(facultyMap, c.courseCode)) {
+          resolvedFac = String(facultyMap[c.courseCode] || "").trim();
+        } else if (isSourceSec) {
+          resolvedFac = c.facultyName || "";
+        } else if (preserveExistingSectionFaculty && existingPeerForCohort?.courseDetails) {
+          const peerCd = existingPeerForCohort.courseDetails.find(
+            pc => String(pc.courseCode || "").trim().toUpperCase() === c.courseCode.toUpperCase()
+          );
+          resolvedFac = peerCd ? String(peerCd.facultyName || "").trim() : "";
+        } else {
+          resolvedFac = c.facultyName || "";
+        }
         return {
-          courseCode: c.courseCode || "",
-          courseName: c.courseName || "",
-          shortName: c.shortName || "",
-          facultyName: customFac || "",
+          courseCode: c.courseCode,
+          courseName: c.courseName,
+          shortName: c.shortName,
+          facultyName: resolvedFac,
           credits: c.credits !== undefined ? c.credits : 3
         };
       });
       const subjects = mappedCourses.map(c => c.courseCode || "");
 
-      // Determine students roster
+      // Determine students roster (prefers Master Roster for target section; preserves source students for source section)
       let targetStudents = [];
       if (isSourceSec && sourceStudents.length > 0) {
         targetStudents = sourceStudents.map(s => ({
@@ -355,7 +398,6 @@ router.post("/bulk-clone", async (req, res) => {
           marks: (s.marks && s.marks.length === subjects.length) ? s.marks : Array(subjects.length).fill("")
         }));
       } else {
-        // Load Master Roster for target cohort
         const cohortName = `${prog}-${dept} - ${yearSemSec}`;
         const rosterDoc = await Roster.findOne({ cohortName });
         if (rosterDoc && rosterDoc.students && rosterDoc.students.length > 0) {
@@ -367,24 +409,15 @@ router.post("/bulk-clone", async (req, res) => {
             dob: s.dob || "",
             marks: Array(subjects.length).fill("")
           }));
-        } else {
-          // Fallback: check if any existing class with this yearSemSec has students
-          const existingPeer = await ClassData.findOne({
-            programme: prog,
-            department: dept,
-            yearSemSec,
-            isDeleted: { $ne: true }
-          });
-          if (existingPeer && existingPeer.students && existingPeer.students.length > 0) {
-            targetStudents = existingPeer.students.map(s => ({
-              regNo: s.regNo,
-              name: s.name,
-              gender: s.gender || "Boy",
-              studentType: s.studentType || "Day Scholar",
-              dob: s.dob || "",
-              marks: Array(subjects.length).fill("")
-            }));
-          }
+        } else if (existingPeerForCohort && existingPeerForCohort.students && existingPeerForCohort.students.length > 0) {
+          targetStudents = existingPeerForCohort.students.map(s => ({
+            regNo: s.regNo,
+            name: s.name,
+            gender: s.gender || "Boy",
+            studentType: s.studentType || "Day Scholar",
+            dob: s.dob || "",
+            marks: Array(subjects.length).fill("")
+          }));
         }
       }
 
@@ -423,7 +456,7 @@ router.post("/bulk-clone", async (req, res) => {
         }
 
         await cls.save();
-        results.push({ className, action: "updated", studentCount: cls.students?.length || 0 });
+        results.push({ className, section: targetSec, examName: targetExam, action: "updated", studentCount: cls.students?.length || 0 });
       } else {
         const newClass = new ClassData({
           className,
@@ -442,24 +475,30 @@ router.post("/bulk-clone", async (req, res) => {
           eseGradingSystem: source.eseGradingSystem || "System 2"
         });
         await newClass.save();
-        results.push({ className, action: "created", studentCount: targetStudents.length });
+        results.push({ className, section: targetSec, examName: targetExam, action: "created", studentCount: targetStudents.length });
       }
     };
 
-    // 1. Generate target exams for SOURCE section
-    for (const ex of targetExamsForSource) {
-      if (ex === source.examName) continue;
-      await createOrUpdateClass(source.section, ex, {}, true);
+    // 1. Save/update current exam on source section if requested
+    if (includeSourceCurrentExam && sourceExam) {
+      await createOrUpdateClass(sourceSec, sourceExam, {}, true, false);
     }
 
-    // 2. Generate target sections
+    // 2. Generate other target exams for SOURCE section
+    for (const ex of targetExamsForSource) {
+      if (String(ex || "").trim() === sourceExam) continue;
+      await createOrUpdateClass(sourceSec, ex, {}, true, false);
+    }
+
+    // 3. Generate target sections (each receives its own Master Roster + faculty mapping)
     for (const secConfig of targetSections) {
-      const sec = secConfig.section;
+      const sec = String(secConfig.section || "").trim();
       if (!sec) continue;
-      const examsToRun = secConfig.exams && secConfig.exams.length > 0 ? secConfig.exams : [source.examName];
+      const examsToRun = secConfig.exams && secConfig.exams.length > 0 ? secConfig.exams : [sourceExam];
       const facMap = secConfig.facultyMap || {};
+      const preserveFac = Boolean(secConfig.preserveExistingSectionFaculty);
       for (const ex of examsToRun) {
-        await createOrUpdateClass(sec, ex, facMap, false);
+        await createOrUpdateClass(sec, ex, facMap, sec === sourceSec, preserveFac);
       }
     }
 
