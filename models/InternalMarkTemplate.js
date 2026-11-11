@@ -15,7 +15,8 @@ const internalMarkTemplateSchema = new mongoose.Schema({
   isActive: { type: Boolean, default: true },
   headerImage: { type: String, default: "" },
   columns: [columnSchema],
-  createdAt: { type: Date, default: Date.now }
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
 });
 
 module.exports = mongoose.model("InternalMarkTemplate", internalMarkTemplateSchema);

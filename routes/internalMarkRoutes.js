@@ -5,6 +5,7 @@ const InternalMarkTemplate = require("../models/InternalMarkTemplate");
 // Get all templates
 router.get("/", async (req, res) => {
   try {
+    res.set("Cache-Control", "no-store");
     const templates = await InternalMarkTemplate.find().sort({ createdAt: -1 });
     res.json(templates);
   } catch (err) {
@@ -15,6 +16,7 @@ router.get("/", async (req, res) => {
 // Get active template
 router.get("/active", async (req, res) => {
   try {
+    res.set("Cache-Control", "no-store");
     const regulation = req.query.regulation;
     const query = { isActive: true };
     if (regulation) {
@@ -70,7 +72,8 @@ router.post("/", async (req, res) => {
       passMark: normalizePassMark(passMark),
       columns, 
       isActive,
-      headerImage: headerImage || ""
+      headerImage: headerImage || "",
+      updatedAt: new Date()
     });
     await newTemplate.save();
     res.json(newTemplate);
@@ -93,6 +96,7 @@ router.put("/:id", async (req, res) => {
       regulation,
       columns,
       isActive,
+      updatedAt: new Date(),
       ...(passMark !== undefined ? { passMark: normalizePassMark(passMark) } : {}),
       ...(headerImage !== undefined ? { headerImage } : {})
     };
