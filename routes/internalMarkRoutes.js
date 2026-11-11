@@ -49,10 +49,16 @@ router.post("/header-image", async (req, res) => {
   }
 });
 
+const normalizePassMark = (val) => {
+  if (val === undefined || val === null || val === "") return 0;
+  const n = Number(val);
+  return isNaN(n) || n < 0 ? 0 : n;
+};
+
 // Create new template
 router.post("/", async (req, res) => {
   try {
-    const { templateName, regulation, columns, isActive, headerImage } = req.body;
+    const { templateName, regulation, passMark, columns, isActive, headerImage } = req.body;
     if (isActive && regulation) {
       await InternalMarkTemplate.updateMany({ regulation }, { isActive: false });
     } else if (isActive) {
@@ -61,6 +67,7 @@ router.post("/", async (req, res) => {
     const newTemplate = new InternalMarkTemplate({ 
       templateName, 
       regulation, 
+      passMark: normalizePassMark(passMark),
       columns, 
       isActive,
       headerImage: headerImage || ""
@@ -75,15 +82,23 @@ router.post("/", async (req, res) => {
 // Update template
 router.put("/:id", async (req, res) => {
   try {
-    const { templateName, regulation, columns, isActive, headerImage } = req.body;
+    const { templateName, regulation, passMark, columns, isActive, headerImage } = req.body;
     if (isActive && regulation) {
       await InternalMarkTemplate.updateMany({ regulation }, { isActive: false });
     } else if (isActive) {
       await InternalMarkTemplate.updateMany({}, { isActive: false });
     }
+    const updateDoc = {
+      templateName,
+      regulation,
+      columns,
+      isActive,
+      ...(passMark !== undefined ? { passMark: normalizePassMark(passMark) } : {}),
+      ...(headerImage !== undefined ? { headerImage } : {})
+    };
     const updated = await InternalMarkTemplate.findByIdAndUpdate(
       req.params.id,
-      { templateName, regulation, columns, isActive, ...(headerImage !== undefined ? { headerImage } : {}) },
+      updateDoc,
       { new: true }
     );
     res.json(updated);
