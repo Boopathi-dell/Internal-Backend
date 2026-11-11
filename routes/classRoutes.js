@@ -3,6 +3,7 @@ const router = express.Router();
 const jwt = require("jsonwebtoken");
 const ClassData = require("../models/Class");
 const Roster = require("../models/Roster");
+const { SectionStaffMapping } = require("../models/CohortCourse");
 
 const JWT_SECRET = "mec_result_system_secret_2025";
 
@@ -473,24 +474,36 @@ router.post("/bulk-clone", async (req, res) => {
       const yearSemSec = `${y}/${sem}/${targetSec}`;
       const { passMark, markPerSubject } = getExamMarks(targetExam);
 
-      // Load peer class for this cohort once if we need its roster or existing faculty assignments
-      const existingPeerForCohort = await ClassData.findOne({
-        programme: prog,
-        department: dept,
-        yearSemSec,
-        isDeleted: { $ne: true }
-      });
+      // Load peer class & master SectionStaffMapping for this cohort once if we need its roster or mapped faculty
+      const cohortKeyForSec = `${prog}-${dept} - ${yearSemSec}`;
+      const [existingPeerForCohort, staffMappingDoc] = await Promise.all([
+        ClassData.findOne({
+          programme: prog,
+          department: dept,
+          yearSemSec,
+          isDeleted: { $ne: true }
+        }),
+        SectionStaffMapping.findOne({ cohortName: cohortKeyForSec })
+      ]);
 
-      // Map courses and apply faculty overrides cleanly
+      // Map courses and apply explicit faculty overrides -> Master Section Staff Mapping -> peer/source fallback
       const mappedCourses = baseCourses.map(c => {
+        const codeUpper = c.courseCode.toUpperCase();
+        const masterStaffEntry = (staffMappingDoc?.staffAssignments || []).find(
+          sa => String(sa.courseCode || "").trim().toUpperCase() === codeUpper
+        );
+        const masterStaffName = masterStaffEntry ? String(masterStaffEntry.facultyName || "").trim() : "";
+
         let resolvedFac = "";
         if (Object.prototype.hasOwnProperty.call(facultyMap, c.courseCode)) {
           resolvedFac = String(facultyMap[c.courseCode] || "").trim();
+        } else if (masterStaffName) {
+          resolvedFac = masterStaffName;
         } else if (isSourceSec) {
           resolvedFac = c.facultyName || "";
         } else if (preserveExistingSectionFaculty && existingPeerForCohort?.courseDetails) {
           const peerCd = existingPeerForCohort.courseDetails.find(
-            pc => String(pc.courseCode || "").trim().toUpperCase() === c.courseCode.toUpperCase()
+            pc => String(pc.courseCode || "").trim().toUpperCase() === codeUpper
           );
           resolvedFac = peerCd ? String(peerCd.facultyName || "").trim() : "";
         } else {
