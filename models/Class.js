@@ -54,7 +54,7 @@ const classSchema = new mongoose.Schema({
   actionTakenSubjects: { type: [String], default: [] },
   isDeleted: { type: Boolean, default: false },
   deletedAt: { type: Date, default: null }
-});
+}, { timestamps: true });
 
 classSchema.index({ department: 1, yearSemSec: 1, isDeleted: 1 });
 

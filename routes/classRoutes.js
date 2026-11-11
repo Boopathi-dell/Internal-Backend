@@ -265,7 +265,8 @@ router.get("/migrate/assignments", async (req, res) => {
 // GET ALL CLASSES
 router.get("/", async (req, res) => {
   try {
-    const { deletedOnly, department, yearSemSec } = req.query;
+    res.set("Cache-Control", "no-store");
+    const { deletedOnly, department, yearSemSec, summary } = req.query;
     
     // Background cleanup without blocking read responses
     if (Math.random() < 0.05) {
@@ -284,7 +285,12 @@ router.get("/", async (req, res) => {
       query.yearSemSec = yearSemSec;
     }
 
-    const classes = await ClassData.find(query);
+    let dbQuery = ClassData.find(query).sort({ updatedAt: -1, _id: -1 });
+    if (summary === "true") {
+      dbQuery = dbQuery.select("-students -semesterProgress").lean();
+    }
+
+    const classes = await dbQuery;
     res.json(classes);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -925,6 +931,7 @@ router.post("/:className/progress", async (req, res) => {
 // GET A SINGLE CLASS (For Entry, Analysis, Rank)
 router.get("/:className", async (req, res) => {
   try {
+    res.set("Cache-Control", "no-store");
     const cls = await ClassData.findOne({ className: req.params.className, isDeleted: { $ne: true } });
     if (!cls) return res.status(404).json({ error: "Class not found" });
     res.json(cls);
