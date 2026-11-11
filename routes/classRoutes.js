@@ -112,6 +112,108 @@ const formatDate = (dateStr) => {
   return `${day}-${month}-${year}`;
 };
 
+// Merge incoming roster entries while preserving existing marks arrays without Mongoose __v version conflicts
+const mergeCohortStudents = (existingStudents = [], incomingStudents = [], subjectCount = 0, { acceptIncomingMarks = false } = {}) => {
+  return (incomingStudents || []).map(newStudent => {
+    const incomingObj = typeof newStudent.toObject === "function" ? newStudent.toObject() : { ...newStudent };
+    const existing = existingStudents.find(s => s.regNo === incomingObj.regNo);
+    const emptyMarks = Array(subjectCount).fill("");
+    if (existing) {
+      const existingObj = typeof existing.toObject === "function" ? existing.toObject() : { ...existing };
+      const marks = (acceptIncomingMarks && incomingObj.marks && incomingObj.marks.length > 0)
+        ? incomingObj.marks
+        : (existingObj.marks || emptyMarks);
+      const dob = acceptIncomingMarks
+        ? (incomingObj.dob !== undefined ? incomingObj.dob : existingObj.dob)
+        : (incomingObj.dob || existingObj.dob);
+      return {
+        ...existingObj,
+        name: incomingObj.name,
+        regNo: incomingObj.regNo,
+        gender: incomingObj.gender || existingObj.gender,
+        studentType: incomingObj.studentType || existingObj.studentType,
+        dob,
+        marks
+      };
+    }
+    return {
+      ...incomingObj,
+      marks: (acceptIncomingMarks && incomingObj.marks && incomingObj.marks.length > 0) ? incomingObj.marks : emptyMarks
+    };
+  });
+};
+
+// Create a new class document safely; fall back to atomic update if a concurrent request creates it first
+const createClassSafely = async (docFields) => {
+  try {
+    const doc = new ClassData(docFields);
+    return await doc.save();
+  } catch (err) {
+    if (err && err.code === 11000) {
+      return await ClassData.findOneAndUpdate(
+        { className: docFields.className },
+        { $set: { ...docFields, isDeleted: false } },
+        { new: true }
+      );
+    }
+    throw err;
+  }
+};
+
+// Propagate student roster (and optional course details) across all exams for the same section
+const propagateRosterToCohort = async (baseClass, roster, newCourseDetails) => {
+  const otherClasses = await ClassData.find({
+    programme: baseClass.programme,
+    department: baseClass.department,
+    yearSemSec: baseClass.yearSemSec,
+    _id: { $ne: baseClass._id }
+  });
+
+  for (const otherCls of otherClasses) {
+    const updateFields = {
+      students: mergeCohortStudents(otherCls.students, roster, (otherCls.subjects || []).length)
+    };
+    if (newCourseDetails && newCourseDetails.length > 0) {
+      updateFields.courseDetails = newCourseDetails;
+      updateFields.subjects = newCourseDetails.map(cd => cd.courseCode || "");
+    }
+    await ClassData.findByIdAndUpdate(otherCls._id, { $set: updateFields }, { new: true });
+  }
+};
+
+// Propagate subject structure, date, and grading system across sections of the same Year/Sem and exam
+const propagateYearSemSettings = async (baseClass, courseDetails, date, eseGradingSystem) => {
+  const yearSemPrefix = baseClass.yearSemSec.split('/').slice(0, 2).join('/');
+  const otherYearSemClasses = await ClassData.find({
+    programme: baseClass.programme,
+    department: baseClass.department,
+    examName: baseClass.examName,
+    yearSemSec: { $regex: `^${yearSemPrefix}/` },
+    _id: { $ne: baseClass._id },
+    isDeleted: { $ne: true }
+  });
+
+  for (const otherCls of otherYearSemClasses) {
+    const updateFields = {};
+    if (courseDetails && courseDetails.length > 0) {
+      updateFields.courseDetails = courseDetails.map(newCd => {
+        const existingCd = otherCls.courseDetails?.find(oldCd => oldCd.courseCode === newCd.courseCode);
+        return {
+          ...newCd,
+          facultyName: existingCd ? existingCd.facultyName : ""
+        };
+      });
+      updateFields.subjects = courseDetails.map(cd => cd.courseCode || "");
+    }
+    if (date !== undefined) updateFields.date = date;
+    if (eseGradingSystem !== undefined) updateFields.eseGradingSystem = eseGradingSystem;
+
+    if (Object.keys(updateFields).length > 0) {
+      await ClassData.findByIdAndUpdate(otherCls._id, { $set: updateFields }, { new: true });
+    }
+  }
+};
+
 
 // GET ALL CLASSES
 router.get("/migrate/assignments", async (req, res) => {
@@ -119,9 +221,12 @@ router.get("/migrate/assignments", async (req, res) => {
     const classes = await ClassData.find({ examName: /Assignment/i });
     let count = 0;
     for (let c of classes) {
-      c.examName = c.examName.replace(/Assignment/ig, "Unit Test");
-      c.className = c.className.replace(/Assignment/ig, "Unit Test");
-      await c.save();
+      await ClassData.findByIdAndUpdate(c._id, {
+        $set: {
+          examName: c.examName.replace(/Assignment/ig, "Unit Test"),
+          className: c.className.replace(/Assignment/ig, "Unit Test")
+        }
+      });
       count++;
     }
     res.json({ success: true, count, message: "Migrated Assignment to Unit Test successfully!" });
@@ -247,45 +352,34 @@ router.post("/roster", async (req, res) => {
     const otherClasses = await ClassData.find({ programme, department, yearSemSec });
     
     if (otherClasses.length === 0) {
-      // Create a base roster class to hold the students
+      // Create or update base roster class atomically to hold the students
       const baseClassName = `${programme}-${department} - ${yearSemSec.replace(/\//g, '/')} - Base Roster`;
-      await ClassData.deleteOne({ className: baseClassName });
-      const newCls = new ClassData({
-        className: baseClassName,
-        examName: "Base Roster",
-        passMark: 0,
-        markPerSubject: 0,
-        students: students,
-        department,
-        yearSemSec,
-        programme,
-        isDeleted: false
-      });
-      await newCls.save();
-    } else {
-      // Update roster for all existing classes in this cohort
-      for (const cls of otherClasses) {
-        const updatedStudents = students.map(newStudent => {
-          const existing = cls.students.find(s => s.regNo === newStudent.regNo);
-          if (existing) {
-            const marks = existing.marks || Array(cls.subjects.length).fill("");
-            return {
-              ...existing.toObject(),
-              name: newStudent.name,
-              regNo: newStudent.regNo,
-              gender: newStudent.gender || existing.gender,
-              studentType: newStudent.studentType || existing.studentType,
-              dob: newStudent.dob || existing.dob,
-              marks: marks
-            };
+      await ClassData.findOneAndUpdate(
+        { className: baseClassName },
+        {
+          $set: {
+            className: baseClassName,
+            examName: "Base Roster",
+            passMark: 0,
+            markPerSubject: 0,
+            students,
+            department,
+            yearSemSec,
+            programme,
+            isDeleted: false
           }
-          return {
-            ...newStudent,
-            marks: Array(cls.subjects.length).fill("")
-          };
-        });
-        cls.students = updatedStudents;
-        await cls.save();
+        },
+        { upsert: true, new: true }
+      );
+    } else {
+      // Update roster for all existing classes in this cohort atomically (avoids Mongoose __v VersionError)
+      for (const cls of otherClasses) {
+        const updatedStudents = mergeCohortStudents(cls.students, students, (cls.subjects || []).length);
+        await ClassData.findByIdAndUpdate(
+          cls._id,
+          { $set: { students: updatedStudents } },
+          { new: true }
+        );
       }
     }
     res.json({ message: "Roster saved successfully." });
@@ -426,21 +520,23 @@ router.post("/bulk-clone", async (req, res) => {
 
       let cls = await ClassData.findOne({ className });
       if (cls) {
-        cls.subjects = subjects;
-        cls.courseDetails = mappedCourses;
-        cls.passMark = passMark;
-        cls.markPerSubject = markPerSubject;
-        cls.examName = targetExam;
-        cls.targetPassPercentage = Number(source.targetPassPercentage) || 85;
-        cls.date = source.date || cls.date || "";
-        cls.department = dept;
-        cls.yearSemSec = yearSemSec;
-        cls.programme = prog;
-        cls.isDeleted = false;
-        if (source.eseGradingSystem) cls.eseGradingSystem = source.eseGradingSystem;
+        const updateFields = {
+          subjects,
+          courseDetails: mappedCourses,
+          passMark,
+          markPerSubject,
+          examName: targetExam,
+          targetPassPercentage: Number(source.targetPassPercentage) || 85,
+          date: source.date || cls.date || "",
+          department: dept,
+          yearSemSec,
+          programme: prog,
+          isDeleted: false
+        };
+        if (source.eseGradingSystem) updateFields.eseGradingSystem = source.eseGradingSystem;
 
         if (cls.students && cls.students.length > 0 && targetStudents.length > 0) {
-          const merged = targetStudents.map(newS => {
+          updateFields.students = targetStudents.map(newS => {
             const old = cls.students.find(s => s.regNo === newS.regNo);
             if (old) {
               return {
@@ -450,15 +546,18 @@ router.post("/bulk-clone", async (req, res) => {
             }
             return newS;
           });
-          cls.students = merged;
         } else if (targetStudents.length > 0) {
-          cls.students = targetStudents;
+          updateFields.students = targetStudents;
         }
 
-        await cls.save();
-        results.push({ className, section: targetSec, examName: targetExam, action: "updated", studentCount: cls.students?.length || 0 });
+        const savedCls = await ClassData.findByIdAndUpdate(
+          cls._id,
+          { $set: updateFields },
+          { new: true }
+        );
+        results.push({ className, section: targetSec, examName: targetExam, action: "updated", studentCount: savedCls?.students?.length || 0 });
       } else {
-        const newClass = new ClassData({
+        await createClassSafely({
           className,
           subjects,
           courseDetails: mappedCourses,
@@ -474,7 +573,6 @@ router.post("/bulk-clone", async (req, res) => {
           allowEditing: true,
           eseGradingSystem: source.eseGradingSystem || "System 2"
         });
-        await newClass.save();
         results.push({ className, section: targetSec, examName: targetExam, action: "created", studentCount: targetStudents.length });
       }
     };
@@ -521,120 +619,44 @@ router.post("/", async (req, res) => {
     // Purge any deleted class with the same name to prevent key collisions
     await ClassData.deleteOne({ className, isDeleted: true });
 
-    const propagateRosterToCohort = async (baseClass, roster, newCourseDetails) => {
-      const otherClasses = await ClassData.find({
-        programme: baseClass.programme,
-        department: baseClass.department,
-        yearSemSec: baseClass.yearSemSec,
-        _id: { $ne: baseClass._id }
-      });
+    const existingCls = await ClassData.findOne({ className });
+    let savedClass;
 
-      for (const otherCls of otherClasses) {
-        // Propagate students (preserve existing marks by regNo)
-        const updatedOtherStudents = roster.map(newStudent => {
-          const existing = otherCls.students.find(s => s.regNo === newStudent.regNo);
-          if (existing) {
-            const marks = existing.marks || Array(otherCls.subjects.length).fill("");
-            return {
-              ...existing.toObject(),
-              name: newStudent.name,
-              regNo: newStudent.regNo,
-              gender: newStudent.gender || existing.gender,
-              studentType: newStudent.studentType || existing.studentType,
-              dob: newStudent.dob || existing.dob,
-              marks: marks
-            };
-          }
-          return {
-            ...newStudent,
-            marks: Array(otherCls.subjects.length).fill("")
-          };
-        });
-        otherCls.students = updatedOtherStudents;
+    if (existingCls) {
+      // Update existing atomically via $set so concurrent edits / double-saves never trigger VersionError
+      const updateFields = {
+        subjects,
+        passMark,
+        examName,
+        markPerSubject,
+        isDeleted: false,
+        students: mergeCohortStudents(existingCls.students, students, subjects.length, { acceptIncomingMarks: true })
+      };
+      if (courseDetails) updateFields.courseDetails = courseDetails;
+      if (targetPassPercentage) updateFields.targetPassPercentage = targetPassPercentage;
+      if (date !== undefined) updateFields.date = date;
+      if (department !== undefined) updateFields.department = department;
+      if (yearSemSec !== undefined) updateFields.yearSemSec = yearSemSec;
+      if (programme !== undefined) updateFields.programme = programme;
+      if (allowEditing !== undefined) updateFields.allowEditing = allowEditing;
+      if (editingStartDate !== undefined) updateFields.editingStartDate = editingStartDate;
+      if (editingEndDate !== undefined) updateFields.editingEndDate = editingEndDate;
+      if (editingStartTime !== undefined) updateFields.editingStartTime = editingStartTime;
+      if (editingEndTime !== undefined) updateFields.editingEndTime = editingEndTime;
+      if (eseGradingSystem !== undefined) updateFields.eseGradingSystem = eseGradingSystem;
 
-        // Propagate course details (subjects / faculty info) to the other class
-        if (newCourseDetails && newCourseDetails.length > 0) {
-          otherCls.courseDetails = newCourseDetails;
-          // Keep subjects array in sync with course codes
-          otherCls.subjects = newCourseDetails.map(cd => cd.courseCode || "");
-        }
-
-        await otherCls.save();
-      }
-    };
-
-    let cls = await ClassData.findOne({ className });
-    if (cls) {
-      // Update existing
-      cls.subjects = subjects;
-      cls.passMark = passMark;
-      cls.examName = examName;
-      cls.markPerSubject = markPerSubject;
-      if (courseDetails) cls.courseDetails = courseDetails;
-      if (targetPassPercentage) cls.targetPassPercentage = targetPassPercentage;
-      if (date !== undefined) cls.date = date;
-      if (department !== undefined) cls.department = department;
-      if (yearSemSec !== undefined) cls.yearSemSec = yearSemSec;
-      if (programme !== undefined) cls.programme = programme;
-      if (allowEditing !== undefined) cls.allowEditing = allowEditing;
-      if (editingStartDate !== undefined) cls.editingStartDate = editingStartDate;
-      if (editingEndDate !== undefined) cls.editingEndDate = editingEndDate;
-      if (editingStartTime !== undefined) cls.editingStartTime = editingStartTime;
-      if (editingEndTime !== undefined) cls.editingEndTime = editingEndTime;
-      if (eseGradingSystem !== undefined) cls.eseGradingSystem = eseGradingSystem;
-      
-      // Preserve existing marks for students that are kept, add new ones empty
-      const updatedStudents = students.map(newStudent => {
-        const existing = cls.students.find(s => s.regNo === newStudent.regNo);
-        if (existing) {
-          // ensure marks array is same length as new subjects
-          const marks = (newStudent.marks && newStudent.marks.length > 0) ? newStudent.marks : (existing.marks || Array(subjects.length).fill(""));
-          return { ...existing.toObject(), name: newStudent.name, regNo: newStudent.regNo, gender: newStudent.gender || existing.gender, studentType: newStudent.studentType || existing.studentType, dob: newStudent.dob !== undefined ? newStudent.dob : existing.dob, marks: marks };
-        }
-        return { ...newStudent, marks: (newStudent.marks && newStudent.marks.length > 0) ? newStudent.marks : Array(subjects.length).fill("") };
-      });
-      cls.students = updatedStudents;
-      await cls.save();
-
-      if (propagateRoster) {
-        await propagateRosterToCohort(cls, students, courseDetails);
-      }
-
-      if (propagateToYearSem) {
-        const yearSemPrefix = cls.yearSemSec.split('/').slice(0, 2).join('/');
-        const otherYearSemClasses = await ClassData.find({
-          programme: cls.programme,
-          department: cls.department,
-          examName: cls.examName,
-          yearSemSec: { $regex: `^${yearSemPrefix}/` },
-          _id: { $ne: cls._id },
-          isDeleted: { $ne: true }
-        });
-        for (const otherCls of otherYearSemClasses) {
-          if (courseDetails && courseDetails.length > 0) {
-            otherCls.courseDetails = courseDetails.map(newCd => {
-              const existingCd = otherCls.courseDetails?.find(oldCd => oldCd.courseCode === newCd.courseCode);
-              return {
-                ...newCd,
-                facultyName: existingCd ? existingCd.facultyName : ""
-              };
-            });
-            otherCls.subjects = courseDetails.map(cd => cd.courseCode || "");
-          }
-          if (date !== undefined) otherCls.date = date;
-          if (eseGradingSystem !== undefined) otherCls.eseGradingSystem = eseGradingSystem;
-          await otherCls.save();
-        }
-      }
-
-      return res.json(cls);
+      savedClass = await ClassData.findByIdAndUpdate(
+        existingCls._id,
+        { $set: updateFields },
+        { new: true }
+      );
     } else {
-      // Create new
-      const sList = students.map(s => ({
+      // Create new safely (handles concurrent creation races via duplicate-key atomic fallback)
+      const sList = (students || []).map(s => ({
         ...s,
         marks: (s.marks && s.marks.length > 0) ? s.marks : Array(subjects.length).fill("")
       }));
-      const newClass = new ClassData({
+      savedClass = await createClassSafely({
         className,
         subjects,
         passMark,
@@ -654,41 +676,17 @@ router.post("/", async (req, res) => {
         editingEndTime: editingEndTime || "",
         eseGradingSystem: eseGradingSystem || "System 2"
       });
-      await newClass.save();
-
-      if (propagateRoster) {
-        await propagateRosterToCohort(newClass, students, courseDetails);
-      }
-
-      if (propagateToYearSem) {
-        const yearSemPrefix = newClass.yearSemSec.split('/').slice(0, 2).join('/');
-        const otherYearSemClasses = await ClassData.find({
-          programme: newClass.programme,
-          department: newClass.department,
-          examName: newClass.examName,
-          yearSemSec: { $regex: `^${yearSemPrefix}/` },
-          _id: { $ne: newClass._id },
-          isDeleted: { $ne: true }
-        });
-        for (const otherCls of otherYearSemClasses) {
-          if (courseDetails && courseDetails.length > 0) {
-            otherCls.courseDetails = courseDetails.map(newCd => {
-              const existingCd = otherCls.courseDetails?.find(oldCd => oldCd.courseCode === newCd.courseCode);
-              return {
-                ...newCd,
-                facultyName: existingCd ? existingCd.facultyName : ""
-              };
-            });
-            otherCls.subjects = courseDetails.map(cd => cd.courseCode || "");
-          }
-          if (date !== undefined) otherCls.date = date;
-          if (eseGradingSystem !== undefined) otherCls.eseGradingSystem = eseGradingSystem;
-          await otherCls.save();
-        }
-      }
-
-      return res.json(newClass);
     }
+
+    if (propagateRoster && savedClass) {
+      await propagateRosterToCohort(savedClass, students, courseDetails);
+    }
+
+    if (propagateToYearSem && savedClass) {
+      await propagateYearSemSettings(savedClass, courseDetails, date, eseGradingSystem);
+    }
+
+    return res.json(savedClass);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -739,10 +737,14 @@ router.post("/:className/marks", async (req, res) => {
       }
     }
 
-    cls.students = recalculateClassStudents(cls, students);
-    await cls.save();
+    const recalculatedStudents = recalculateClassStudents(cls, students);
+    const updatedCls = await ClassData.findByIdAndUpdate(
+      cls._id,
+      { $set: { students: recalculatedStudents } },
+      { new: true }
+    );
     
-    res.json(cls);
+    res.json(updatedCls);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -784,8 +786,12 @@ router.post("/:className/clear-subject-marks", requireStrictAdmin, async (req, r
       return { ...studentObj, marks };
     });
 
-    cls.students = recalculateClassStudents(cls, updatedStudents);
-    await cls.save();
+    const recalculatedStudents = recalculateClassStudents(cls, updatedStudents);
+    const updatedCls = await ClassData.findByIdAndUpdate(
+      cls._id,
+      { $set: { students: recalculatedStudents } },
+      { new: true }
+    );
 
     res.json({
       success: true,
@@ -794,7 +800,7 @@ router.post("/:className/clear-subject-marks", requireStrictAdmin, async (req, r
       subjectIndex: idx,
       subjectCode: cls.subjects[idx],
       backupMarksByRegNo,
-      classData: cls
+      classData: updatedCls
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -831,14 +837,18 @@ router.post("/:className/restore-subject-marks", requireStrictAdmin, async (req,
       return { ...studentObj, marks };
     });
 
-    cls.students = recalculateClassStudents(cls, updatedStudents);
-    await cls.save();
+    const recalculatedStudents = recalculateClassStudents(cls, updatedStudents);
+    const updatedCls = await ClassData.findByIdAndUpdate(
+      cls._id,
+      { $set: { students: recalculatedStudents } },
+      { new: true }
+    );
 
     res.json({
       success: true,
       restoredCount,
       subjectIndex: idx,
-      classData: cls
+      classData: updatedCls
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -852,9 +862,12 @@ router.post("/:className/progress", async (req, res) => {
     const cls = await ClassData.findOne({ className: req.params.className });
     if (!cls) return res.status(404).json({ error: "Class not found" });
 
-    cls.semesterProgress = semesterProgress;
-    await cls.save();
-    res.json(cls);
+    const updatedCls = await ClassData.findByIdAndUpdate(
+      cls._id,
+      { $set: { semesterProgress } },
+      { new: true }
+    );
+    res.json(updatedCls);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -878,13 +891,19 @@ router.post("/:className/attendance", async (req, res) => {
     const cls = await ClassData.findOne({ className: req.params.className });
     if (!cls) return res.status(404).json({ error: "Class not found" });
 
-    cls.students.forEach(student => {
-      if (attendanceMap[student.regNo] !== undefined) {
-        student.attendance = attendanceMap[student.regNo];
+    const updatedStudents = (cls.students || []).map(student => {
+      const studentObj = typeof student.toObject === "function" ? student.toObject() : { ...student };
+      if (attendanceMap && attendanceMap[studentObj.regNo] !== undefined) {
+        studentObj.attendance = attendanceMap[studentObj.regNo];
       }
+      return studentObj;
     });
 
-    await cls.save();
+    await ClassData.findByIdAndUpdate(
+      cls._id,
+      { $set: { students: updatedStudents } },
+      { new: true }
+    );
     res.json({ message: "Attendance saved successfully" });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -895,14 +914,18 @@ router.post("/:className/attendance", async (req, res) => {
 router.put("/:id/report-settings", async (req, res) => {
   try {
     const { iqacPrefix, academicYearText, actionTakenSubjects } = req.body;
-    const cls = await ClassData.findById(req.params.id);
+    const updateFields = {};
+    if (iqacPrefix !== undefined) updateFields.iqacPrefix = iqacPrefix;
+    if (academicYearText !== undefined) updateFields.academicYearText = academicYearText;
+    if (actionTakenSubjects !== undefined) updateFields.actionTakenSubjects = actionTakenSubjects;
+
+    const cls = await ClassData.findByIdAndUpdate(
+      req.params.id,
+      { $set: updateFields },
+      { new: true }
+    );
     if (!cls) return res.status(404).json({ error: "Class not found" });
 
-    if (iqacPrefix !== undefined) cls.iqacPrefix = iqacPrefix;
-    if (academicYearText !== undefined) cls.academicYearText = academicYearText;
-    if (actionTakenSubjects !== undefined) cls.actionTakenSubjects = actionTakenSubjects;
-
-    await cls.save();
     res.json({ message: "Report settings updated successfully", class: cls });
   } catch (err) {
     res.status(500).json({ error: err.message });

@@ -62,8 +62,11 @@ router.post("/", async (req, res) => {
           };
         });
         
-        cls.students = newStudents;
-        await cls.save();
+        await Class.findByIdAndUpdate(
+          cls._id,
+          { $set: { students: newStudents } },
+          { new: true }
+        );
       }
 
       res.json({ message: "Roster updated successfully", roster });
@@ -137,11 +140,11 @@ router.post("/promote", async (req, res) => {
 
       for (const cls of conflictingClasses) {
         // Prevent double prefixing if it already has one (edge case)
+        const updateFields = { isDeleted: true }; // Hide from standard views
         if (!cls.className.startsWith("[ARCHIVED")) {
-          cls.className = `${archivePrefix}${cls.className}`;
+          updateFields.className = `${archivePrefix}${cls.className}`;
         }
-        cls.isDeleted = true; // Hide from standard views
-        await cls.save();
+        await Class.findByIdAndUpdate(cls._id, { $set: updateFields }, { new: true });
       }
     }
 
