@@ -928,6 +928,71 @@ router.post("/:className/progress", async (req, res) => {
   }
 });
 
+// ADMIN ONLY: QUICK-UPDATE MAX MARK & PASS MARK (AND OPTIONAL COHORT SYNC) WITH AUTO RECALCULATION
+router.put("/:className/mark-limits", requireStrictAdmin, async (req, res) => {
+  try {
+    const cls = await ClassData.findOne({ className: req.params.className, isDeleted: { $ne: true } });
+    if (!cls) return res.status(404).json({ error: "Class not found." });
+
+    const maxNum = Number(req.body.markPerSubject);
+    const passNum = Number(req.body.passMark);
+    const syncAllSections = Boolean(req.body.syncAllSections);
+
+    if (!Number.isFinite(maxNum) || maxNum <= 0) {
+      return res.status(400).json({ error: "Max Mark must be a positive number." });
+    }
+    if (!Number.isFinite(passNum) || passNum < 0) {
+      return res.status(400).json({ error: "Pass Mark cannot be negative." });
+    }
+    if (cls.examName !== "ESE" && passNum > maxNum) {
+      return res.status(400).json({ error: `Pass Mark (${passNum}) cannot exceed Max Mark (${maxNum}).` });
+    }
+
+    const updateLimitsAndRecalculate = async (doc) => {
+      const nextClsRef = {
+        ...doc.toObject(),
+        markPerSubject: maxNum,
+        passMark: passNum
+      };
+      const recalculatedStudents = recalculateClassStudents(nextClsRef, doc.students);
+      return ClassData.findByIdAndUpdate(
+        doc._id,
+        { $set: { markPerSubject: maxNum, passMark: passNum, students: recalculatedStudents } },
+        { new: true }
+      );
+    };
+
+    let targets = [cls];
+    if (syncAllSections && cls.yearSemSec) {
+      const yrSemParts = String(cls.yearSemSec).split("/").slice(0, 2);
+      if (yrSemParts.length === 2 && yrSemParts[0] && yrSemParts[1]) {
+        const escapedPrefix = `${yrSemParts[0]}/${yrSemParts[1]}/`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const siblings = await ClassData.find({
+          programme: cls.programme || "B.E",
+          department: cls.department || "CSE",
+          examName: cls.examName,
+          yearSemSec: new RegExp(`^${escapedPrefix}`),
+          isDeleted: { $ne: true }
+        });
+        if (siblings.length > 0) {
+          targets = siblings;
+        }
+      }
+    }
+
+    const updatedDocs = await Promise.all(targets.map(updateLimitsAndRecalculate));
+    const updatedPrimary = updatedDocs.find(d => d && String(d._id) === String(cls._id)) || updatedDocs[0];
+
+    res.json({
+      success: true,
+      updatedCount: updatedDocs.length,
+      classData: updatedPrimary
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET A SINGLE CLASS (For Entry, Analysis, Rank)
 router.get("/:className", async (req, res) => {
   try {
