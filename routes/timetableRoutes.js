@@ -175,10 +175,30 @@ const isLabLikeBlock = (item) => {
   return isBlockType(item.type) || isPhysicalLab(item);
 };
 
-// Helper: Checks if subject is pure Core Theory (NO lab, project, seminar, library, mentoring, free)
+// Helper: Checks if an item represents a training subject (trainer course or continuous multi-hour pattern)
+const isTrainingSubject = (item) => {
+  if (!item) return false;
+  if (item.isTraining) return true;
+  const t = (item.type || "").toLowerCase();
+  if (t.includes("training") || t.includes("trainer")) return true;
+  const pat = (item.slotPattern || "").trim().toLowerCase();
+  if (pat && pat !== "regular") return true;
+  return false;
+};
+
+// Helper: Identifies any session (Lab, Project, OR Training / Continuous Block) that must stay in continuous multi-period blocks
+const isContinuousBlockSubject = (item) => {
+  if (!item) return false;
+  if (isLabLikeBlock(item)) return true;
+  if (isTrainingSubject(item)) return true;
+  if (item.parsedPattern?.blocks && item.parsedPattern.blocks.length > 0) return true;
+  return false;
+};
+
+// Helper: Checks if subject is pure Core Theory (NO lab, project, seminar, library, mentoring, free, training)
 const isPureTheorySubject = (item) => {
   if (!item) return false;
-  if (isLibraryItem(item) || isSeminarItem(item) || isLabLikeBlock(item)) return false;
+  if (isLibraryItem(item) || isSeminarItem(item) || isContinuousBlockSubject(item)) return false;
   const t = (item.type || "").toLowerCase();
   const c = (item.subjectCode || item.code || "").toLowerCase();
   const n = (item.subjectName || item.name || "").toLowerCase();
@@ -307,6 +327,7 @@ const buildOccupiedSlotObject = (item, p, time) => {
   const isPhysical = isPhysicalLab(item);
   const isLib = isLibraryItem(item);
   const isSem = isSeminarItem(item);
+  const isTr = !isPhysical && (!!item.isTraining || isTrainingSubject(item));
   return {
     period: p,
     time: time || DEFAULT_TIMINGS[p],
@@ -315,10 +336,10 @@ const buildOccupiedSlotObject = (item, p, time) => {
     shortName: item.shortName || item.subjectCode || item.code,
     facultyName: facs.join(", ") || "-",
     facultyNames: facs,
-    type: item.type || (isPhysical ? "Lab" : "Theory"),
+    type: item.type || (isPhysical ? "Lab" : (isTr ? "Training" : "Theory")),
     difficulty: item.difficulty || "Normal",
-    isTraining: !isPhysical && !!item.isTraining,
-    room: item.room || (isLib ? "Library" : (isSem ? "Seminar Hall" : (isPhysical ? (item.shortName || item.type || "LAB") : (item.isTraining ? "Training Hall / LH-1" : "LH-1"))))
+    isTraining: isTr,
+    room: item.room || (isLib ? "Library" : (isSem ? "Seminar Hall" : (isPhysical ? (item.shortName || item.type || "LAB") : (isTr ? "Training Hall / LH-1" : "LH-1"))))
   };
 };
 
@@ -1195,20 +1216,24 @@ const getCandidateBlocksForDuration = (dur, isLab = false, includeExtendedRescue
     return base;
   }
   if (dur === 2) {
+    // Official 2-hour blocks:
+    // P1-P2 (09:10 - 11:00) Morning Session 1 (before tea break)
+    // P3-P4 (11:15 - 01:00) Morning Session 2 (between tea break and lunch)
+    // P5-P6 (01:45 - 03:35) Afternoon Session 1 (after lunch)
     const base = isLab
       ? [
           { name: "Afternoon (5-6)", periods: [5, 6] },
-          { name: "Afternoon (6-7)", periods: [6, 7] },
           { name: "Morning (3-4)", periods: [3, 4] },
-          { name: "Morning (2-3)", periods: [2, 3] }
+          { name: "Morning (1-2)", periods: [1, 2] }
         ]
       : [
+          { name: "Morning (1-2)", periods: [1, 2] },
           { name: "Morning (3-4)", periods: [3, 4] },
-          { name: "Afternoon (5-6)", periods: [5, 6] },
-          { name: "Afternoon (6-7)", periods: [6, 7] },
-          { name: "Morning (2-3)", periods: [2, 3] }
+          { name: "Afternoon (5-6)", periods: [5, 6] }
         ];
-    if (includeExtendedRescue) base.push({ name: "Morning (1-2)", periods: [1, 2] });
+    if (includeExtendedRescue) {
+      base.push({ name: "Afternoon (6-7)", periods: [6, 7] });
+    }
     return base;
   }
   return [
@@ -1235,10 +1260,14 @@ const parseSlotPattern = (pat, hours, isTr, type, isLab = false) => {
     return { blocks: [2], singles: Math.max(0, total - 2) };
   }
   if (cleanPat === "2+2") return { blocks: [2, 2], singles: Math.max(0, total - 4) };
+  if (cleanPat === "2+2+2+2") return { blocks: [2, 2, 2, 2], singles: Math.max(0, total - 8) };
+  if (cleanPat === "2+2+2") return { blocks: [2, 2, 2], singles: Math.max(0, total - 6) };
   if (cleanPat === "2+1") return { blocks: [2], singles: Math.max(0, total - 2) };
   if (cleanPat === "2+1+1") return { blocks: [2], singles: Math.max(0, total - 2) };
   if (cleanPat === "3+1") return { blocks: [3], singles: Math.max(0, total - 3) };
   if (cleanPat === "4+3") return { blocks: [4, 3], singles: Math.max(0, total - 7) };
+  if (cleanPat === "2+2+1") return { blocks: [2, 2], singles: Math.max(0, total - 4) };
+  if (cleanPat === "3+2") return { blocks: [3, 2], singles: Math.max(0, total - 5) };
 
   if (cleanPat && cleanPat !== "regular" && cleanPat !== "block") {
     const parts = cleanPat.split(/[\+,\s\-\/]+/).map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n) && n > 0);
@@ -1276,6 +1305,12 @@ const parseSlotPattern = (pat, hours, isTr, type, isLab = false) => {
     return { blocks: [], singles: total };
   }
 
+  // Training fallback when cleanPat is not explicitly specified:
+  if (total >= 8) {
+    const numTwos = Math.floor(total / 2);
+    const rem = total % 2;
+    return { blocks: Array(numTwos).fill(2), singles: rem };
+  }
   if (total >= 7) return { blocks: [4, 3], singles: Math.max(0, total - 7) };
   if (total === 6) return { blocks: [2, 2, 2], singles: 0 };
   if (total === 5) return { blocks: [2, 2], singles: 1 };
@@ -1648,7 +1683,9 @@ const createGridSolver = ({ classGrid, classKeys, classGroups, facultyMaxWorkloa
         if (block.periods.includes(7)) score += 99999;
         if (block.periods.includes(6)) score += 8000;
       }
-      if ((!isPureTheorySubject(item) || isPhysical) && block.periods.includes(1)) {
+      // Only heavy physical machinery/hardware labs avoid P1 in strict passes;
+      // Training and 2h continuous blocks run comfortably in P1-P2 (09:10-11:00)
+      if (isPhysical && block.periods.includes(1) && !relaxedPass) {
         score += 99999;
       }
       facs.forEach(f => {
@@ -1827,7 +1864,7 @@ const createGridSolver = ({ classGrid, classKeys, classGroups, facultyMaxWorkloa
           // All target periods in ck must not be pinned or another lab/training block
           const blockedByHard = block.periods.some(bp => {
             const sl = classGrid[ck][day][bp];
-            return sl && (sl.isPinned || isLabLikeBlock(sl));
+            return sl && (sl.isPinned || isContinuousBlockSubject(sl));
           });
           if (blockedByHard) continue;
 
@@ -1904,8 +1941,8 @@ const createGridSolver = ({ classGrid, classKeys, classGroups, facultyMaxWorkloa
     const clsAllocs = classGroups[ck]?.allocations || [];
     return clsAllocs.filter(a => {
       const singlesAllowed = a.parsedPattern ? (a.parsedPattern.singles || 0) : 0;
-      if (isLabLikeBlock(a) && singlesAllowed === 0) {
-        return false; // Never split unplaced Labs into single 1h periods
+      if (isContinuousBlockSubject(a) && singlesAllowed === 0) {
+        return false; // Never split unplaced Labs or continuous Training blocks into single 1h periods
       }
       return canSubjectTakeMoreHoursInClass(ck, a);
     }).sort((a, b) => {
@@ -2078,25 +2115,26 @@ const createGridSolver = ({ classGrid, classKeys, classGroups, facultyMaxWorkloa
     return anyPlaced;
   };
 
-  // Recover missing OR damaged partial Lab blocks without ever splitting or losing hours
-  const repairLabAllocations = (targetClassKeys = classKeys) => {
+  // Recover missing OR damaged partial Lab and Training blocks without ever splitting or losing hours
+  const repairContinuousAllocations = (targetClassKeys = classKeys) => {
     targetClassKeys.forEach(ck => {
       (classGroups[ck]?.allocations || []).forEach(item => {
-        if (!isLabLikeBlock(item)) return;
+        if (!isContinuousBlockSubject(item)) return;
         const needed = getAllocHours(item);
         let placed = getPlacedCountInClass(ck, item);
         if (placed >= needed) return;
 
+        const isLab = isLabLikeBlock(item);
         const targetBlocks = [...(item.parsedPattern?.blocks || [])].sort((a, b) => b - a);
         targetBlocks.forEach(blockDur => {
           if (placed + blockDur > needed) return;
-          let ok = placeBlockIntoClass(ck, item, blockDur, { isLabPhase: true, relaxedPass: false });
-          if (!ok) ok = placeBlockIntoClass(ck, item, blockDur, { isLabPhase: true, relaxedPass: true, allowClassSecondLab: true, allowLabDisplacement: true });
-          if (!ok) ok = rescueBlockIntoClass(ck, item, blockDur, true);
+          let ok = placeBlockIntoClass(ck, item, blockDur, { isLabPhase: isLab, relaxedPass: false });
+          if (!ok) ok = placeBlockIntoClass(ck, item, blockDur, { isLabPhase: isLab, relaxedPass: true, allowClassSecondLab: true, allowLabDisplacement: true });
+          if (!ok) ok = rescueBlockIntoClass(ck, item, blockDur, isLab);
           if (ok) placed += blockDur;
         });
 
-        // If a partial/damaged chunk remains (e.g. 2/3 of a 3h Lab), clear unlocked fragments & rebuild full contiguous block(s)
+        // If a partial/damaged chunk remains (e.g. 1 hour of a 2h block), clear unlocked fragments & rebuild full contiguous block(s)
         placed = getPlacedCountInClass(ck, item);
         if (placed < needed) {
           const tx = [];
@@ -2113,15 +2151,15 @@ const createGridSolver = ({ classGrid, classKeys, classGroups, facultyMaxWorkloa
 
           if (tx.length > 0) {
             const rebuildTarget = needed - pinnedCount;
-            const rebuildParsed = parseSlotPattern(item.slotPattern, rebuildTarget, item.isTraining, item.type, true);
+            const rebuildParsed = parseSlotPattern(item.slotPattern, rebuildTarget, item.isTraining, item.type, isLab);
             const rebuildBlocks = [...(rebuildParsed.blocks || [])].sort((a, b) => b - a);
             let rebuiltHours = 0;
             let allRebuilt = rebuildBlocks.length > 0;
 
             for (const blockDur of rebuildBlocks) {
-              let ok = placeBlockIntoClass(ck, item, blockDur, { isLabPhase: true, relaxedPass: false });
-              if (!ok) ok = placeBlockIntoClass(ck, item, blockDur, { isLabPhase: true, relaxedPass: true, allowClassSecondLab: true, allowLabDisplacement: true });
-              if (!ok) ok = rescueBlockIntoClass(ck, item, blockDur, true);
+              let ok = placeBlockIntoClass(ck, item, blockDur, { isLabPhase: isLab, relaxedPass: false });
+              if (!ok) ok = placeBlockIntoClass(ck, item, blockDur, { isLabPhase: isLab, relaxedPass: true, allowClassSecondLab: true, allowLabDisplacement: true });
+              if (!ok) ok = rescueBlockIntoClass(ck, item, blockDur, isLab);
               if (ok) rebuiltHours += blockDur;
               else { allRebuilt = false; break; }
             }
@@ -2141,6 +2179,8 @@ const createGridSolver = ({ classGrid, classKeys, classGroups, facultyMaxWorkloa
       });
     });
   };
+
+  const repairLabAllocations = repairContinuousAllocations;
 
   return {
     facultyBusy,
@@ -2173,6 +2213,7 @@ const createGridSolver = ({ classGrid, classKeys, classGroups, facultyMaxWorkloa
     canPlaceSingleInClass,
     placeBlockIntoClass,
     rescueBlockIntoClass,
+    repairContinuousAllocations,
     repairLabAllocations,
     getDeficitCandidates,
     runTieredDeficitSolver
@@ -2560,20 +2601,20 @@ router.post("/generate", async (req, res) => {
       const maxAllowedP1PerSubject = eligibleP1TheoryCodes.size >= 5 ? 1 : Math.ceil(5 / Math.max(1, eligibleP1TheoryCodes.size));
 
       classGroups[ck].allocations.forEach(a => {
-        const isLab = isLabLikeBlock(a);
+        const isBlockSubj = isContinuousBlockSubject(a);
         const totalNeeded = getAllocHours(a);
         if (totalNeeded <= 0) return;
 
-        // NEVER shatter unplaced Lab blocks into single 1-hour periods; only explicit "+1" singles may run in Step B
-        if (isLab) {
+        // NEVER shatter unplaced multi-period blocks (Labs & Training) into single 1-hour periods; only explicit "+1" singles may run in Step B
+        if (isBlockSubj) {
           const explicitSingles = a.parsedPattern?.singles || 0;
           const blockTargetSum = (a.parsedPattern?.blocks || []).reduce((s, b) => s + b, 0);
           const placedSingles = Math.max(0, getPlacedCountInClass(ck, a) - blockTargetSum);
-          const remainingLabSingles = Math.max(0, explicitSingles - placedSingles);
-          if (remainingLabSingles > 0) {
+          const remainingExplicitSingles = Math.max(0, explicitSingles - placedSingles);
+          if (remainingExplicitSingles > 0) {
             classTheory.push({
               ...(a.toObject ? a.toObject() : a),
-              requiredHours: remainingLabSingles,
+              requiredHours: remainingExplicitSingles,
               hoursAssigned: 0
             });
           }
@@ -3041,7 +3082,8 @@ const buildFacultySchedules = async (doc, department) => {
                 subjectCode: slot.subjectCode,
                 subjectName: slot.subjectName,
                 shortName: slot.shortName || slot.subjectCode,
-                type: slot.type
+                type: slot.type,
+                isTraining: !!slot.isTraining || (slot.type || "").toLowerCase().includes("training")
               };
               facultySchedules[targetKey].totalHours++;
               if (slot.type === "Laboratory" || slot.type === "Lab") facultySchedules[targetKey].labCount = (facultySchedules[targetKey].labCount || 0) + 1;
@@ -3240,12 +3282,12 @@ const healScheduleFreeSlots = async (schedule, department) => {
     });
   });
 
-  // --- PASS 0: CONSOLIDATE SPLIT LABS (Repair any unlocked Lab scattered across single days back into continuous blocks) ---
+  // --- PASS 0: CONSOLIDATE SPLIT BLOCKS (Repair any unlocked Lab OR Training scattered across single days back into continuous blocks) ---
   schedule.classes.forEach(cls => {
     const classAllocs = allAllocations.filter(a => matchesClassAllocation(a, cls));
-    const labAllocs = classAllocs.filter(a => isLabLikeBlock(a) && getAllocHours(a) >= 2);
+    const multiAllocs = classAllocs.filter(a => isContinuousBlockSubject(a) && getAllocHours(a) >= 2);
 
-    labAllocs.forEach(labAlloc => {
+    multiAllocs.forEach(labAlloc => {
       const pat = (labAlloc.slotPattern || "").trim().toLowerCase();
       // Skip only if explicit single-hour "+1" split was requested for 3h (e.g. 2+1) AND only 1 single exists
       const byDay = {};
@@ -3278,7 +3320,7 @@ const healScheduleFreeSlots = async (schedule, department) => {
         const chunk = wantThree ? isolatedSingles.slice(0, 3) : isolatedSingles.slice(0, 2);
         const candidateBlocks = wantThree
           ? [[5, 6, 7], [2, 3, 4]]
-          : [[5, 6], [6, 7], [3, 4], [2, 3]];
+          : [[1, 2], [3, 4], [5, 6], [6, 7]];
 
         // Temporarily vacate chunk slots so they can act as swap destinations
         chunk.forEach(item => {
@@ -3322,7 +3364,7 @@ const healScheduleFreeSlots = async (schedule, department) => {
               const blockers = blockEntries.filter(e =>
                 e.slot && e.slot.type !== "Free" && e.slot.subjectCode !== "FREE" && e.slot.shortName !== "FREE"
               );
-              if (blockers.some(b => b.slot.isPinned || isLabLikeBlock(b.slot) || b.slot.isTraining)) continue;
+              if (blockers.some(b => b.slot.isPinned || isLabLikeBlock(b.slot) || b.slot.isTraining || isContinuousBlockSubject(b.slot))) continue;
 
               const destPool = [];
               chunk.forEach(cItem => destPool.push({ day: cItem.day, idx: cItem.idx, period: cItem.period }));
@@ -3394,7 +3436,8 @@ const healScheduleFreeSlots = async (schedule, department) => {
                 if (fac && fac !== "-") addFacBusy(fac, to.day, to.period);
               });
 
-              // Place unified continuous Lab block
+              // Place unified continuous block
+              const isTr = !isPhysicalLab(labAlloc) && (!!labAlloc.isTraining || isTrainingSubject(labAlloc));
               blockEntries.forEach(be => {
                 targetDayArr[be.idx] = {
                   period: be.period,
@@ -3404,9 +3447,10 @@ const healScheduleFreeSlots = async (schedule, department) => {
                   shortName: labAlloc.shortName || labAlloc.subjectCode,
                   facultyName: labFacs.join(", ") || "-",
                   facultyNames: labFacs,
-                  type: labAlloc.type || "Lab",
+                  type: labAlloc.type || (isTr ? "Training" : "Lab"),
                   difficulty: labAlloc.difficulty || "Normal",
-                  room: `${labAlloc.shortName || (labAlloc.type || "LAB")}`
+                  isTraining: isTr,
+                  room: `${labAlloc.shortName || (labAlloc.type || (isTr ? "Training Hall" : "LAB"))}`
                 };
                 labFacs.forEach(f => addFacBusy(f, targetDay, be.period));
               });
@@ -3528,8 +3572,8 @@ const healScheduleFreeSlots = async (schedule, department) => {
       timings
     });
 
-    // 1. Recover any completely missing OR partially damaged Lab blocks as contiguous sessions
-    solver.repairLabAllocations(classKeys);
+    // 1. Recover any completely missing OR partially damaged Lab & Training blocks as contiguous sessions
+    solver.repairContinuousAllocations(classKeys);
 
     // 2. Run the multi-tiered solver (strict -> relaxFatigue -> 2-hop & cross-class liberation -> zero-free)
     solver.runTieredDeficitSolver(classKeys);

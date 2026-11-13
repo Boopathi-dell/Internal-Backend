@@ -40,3 +40,4 @@ const CohortSubjectMaster = mongoose.model("CohortSubjectMaster", cohortSubjectM
 const SectionStaffMapping = mongoose.model("SectionStaffMapping", sectionStaffMappingSchema);
 
 module.exports = { CohortSubjectMaster, SectionStaffMapping };
+
