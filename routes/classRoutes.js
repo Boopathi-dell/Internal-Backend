@@ -747,6 +747,224 @@ router.post("/", async (req, res) => {
   }
 });
 
+// Helper functions for matching exams in sync-student-mark
+const normalizeExamForSync = (name) => {
+  if (!name) return "";
+  let s = String(name).toLowerCase().replace(/[\s\-_]/g, "");
+  s = s.replace(/unittest/g, "ut");
+  s = s.replace(/cia(iii|3)/g, "cia3")
+       .replace(/cia(ii|2)/g, "cia2")
+       .replace(/cia(iv|4)/g, "cia4")
+       .replace(/cia(i|1)/g, "cia1");
+  s = s.replace(/modelexam(ination)?/g, "cia3_model").replace(/^model$/g, "cia3_model");
+  return s;
+};
+
+const getExamSyncPriority = (targetExam, classExam) => {
+  if (!targetExam || !classExam) return 0;
+  const raw1 = String(targetExam).trim().toLowerCase();
+  const raw2 = String(classExam).trim().toLowerCase();
+  if (raw1 === raw2) return 4;
+  const n1 = normalizeExamForSync(targetExam);
+  const n2 = normalizeExamForSync(classExam);
+  if (n1 && n2 && n1 === n2) return 3;
+  const cia3Aliases = new Set(["cia3", "cia3_model"]);
+  if (cia3Aliases.has(n1) && cia3Aliases.has(n2)) return 2;
+  return 0;
+};
+
+// SYNC SINGLE STUDENT MARK BACK TO SOURCE CLASS (FROM INTERNAL MARKS EDIT INLINE)
+router.post("/sync-student-mark", async (req, res) => {
+  try {
+    const {
+      className,
+      department,
+      yearSemSec,
+      examName,
+      candidateExamNames,
+      regNo,
+      subjectCode,
+      subjectName,
+      mark,
+      isAdmin
+    } = req.body;
+
+    if (!regNo || (!subjectCode && !subjectName)) {
+      return res.status(400).json({ error: "Missing required parameters (regNo, subjectCode)." });
+    }
+
+    let targetClass = null;
+
+    // 1. Direct lookup by className if provided
+    if (className) {
+      targetClass = await ClassData.findOne({ className, isDeleted: { $ne: true } });
+    }
+
+    // 2. Fallback: cohort-based exam search
+    if (!targetClass && yearSemSec) {
+      const yssClean = String(yearSemSec).replace(/\s+/g, "");
+      const query = { isDeleted: { $ne: true } };
+      if (department) query.department = department;
+
+      const cohortClasses = await ClassData.find(query);
+      const matchedCohortClasses = cohortClasses.filter(c => 
+        String(c.yearSemSec || "").replace(/\s+/g, "") === yssClean
+      );
+
+      const examsToTry = Array.from(new Set([
+        ...(Array.isArray(candidateExamNames) ? candidateExamNames : []),
+        examName
+      ])).filter(Boolean);
+
+      let bestScore = -1;
+      for (const cls of matchedCohortClasses) {
+        const clsExam = cls.examName || "";
+        for (const cand of examsToTry) {
+          const priority = getExamSyncPriority(cand, clsExam);
+          if (priority > bestScore) {
+            bestScore = priority;
+            targetClass = cls;
+          }
+        }
+      }
+    }
+
+    if (!targetClass) {
+      return res.status(404).json({ error: "Could not find matching class record in database." });
+    }
+
+    if (!isAdmin && targetClass.allowEditing === false) {
+      return res.status(403).json({ error: "Mark entry is locked for this class." });
+    }
+
+    // 3. Find subject index
+    const normReg = String(regNo).replace(/\s+/g, "").toUpperCase();
+    const cleanSubjCode = String(subjectCode || "").toLowerCase().replace(/[\s\-_]/g, "");
+    const cleanSubjName = String(subjectName || "").toLowerCase().replace(/[\s\-_]/g, "");
+
+    let subjIdx = -1;
+    const count = Math.max(targetClass.subjects?.length || 0, targetClass.courseDetails?.length || 0);
+
+    for (let i = 0; i < count; i++) {
+      const sRaw = String(targetClass.subjects?.[i] || "").toLowerCase().replace(/[\s\-_]/g, "");
+      const cd = targetClass.courseDetails?.[i];
+      const cCode = String(cd?.courseCode || "").toLowerCase().replace(/[\s\-_]/g, "");
+      const cName = String(cd?.courseName || "").toLowerCase().replace(/[\s\-_]/g, "");
+      const cShort = String(cd?.shortName || "").toLowerCase().replace(/[\s\-_]/g, "");
+
+      if (cleanSubjCode && (sRaw === cleanSubjCode || cCode === cleanSubjCode)) {
+        subjIdx = i;
+        break;
+      }
+      if (cleanSubjName && (sRaw === cleanSubjName || cName === cleanSubjName || cShort === cleanSubjName)) {
+        subjIdx = i;
+        break;
+      }
+      if (cleanSubjCode && cleanSubjName && sRaw === `${cleanSubjCode}${cleanSubjName}`) {
+        subjIdx = i;
+        break;
+      }
+    }
+
+    // Token-based prefix match (e.g. "23CSF35 - ...")
+    if (subjIdx === -1 && cleanSubjCode) {
+      for (let i = 0; i < count; i++) {
+        const sRaw = String(targetClass.subjects?.[i] || "").trim().toLowerCase();
+        const firstToken = sRaw.split(/[\s–\-:|/]+/)[0];
+        if (firstToken && firstToken === String(subjectCode || "").trim().toLowerCase()) {
+          subjIdx = i;
+          break;
+        }
+      }
+    }
+
+    if (subjIdx === -1) {
+      return res.status(404).json({ error: `Subject "${subjectCode || subjectName}" not found in class "${targetClass.className}".` });
+    }
+
+    // 4. Find student in targetClass
+    const students = targetClass.students || [];
+    const studentIdx = students.findIndex(s => String(s.regNo || "").replace(/\s+/g, "").toUpperCase() === normReg);
+
+    if (studentIdx === -1) {
+      return res.status(404).json({ error: `Student "${regNo}" not found in class "${targetClass.className}".` });
+    }
+
+    const student = students[studentIdx].toObject ? students[studentIdx].toObject() : { ...students[studentIdx] };
+    const marks = Array.isArray(student.marks) ? [...student.marks] : [];
+    while (marks.length < count) marks.push("");
+
+    const newMarkStr = String(mark !== undefined && mark !== null ? mark : "").trim();
+    marks[subjIdx] = newMarkStr;
+    student.marks = marks;
+
+    // 5. Recalculate student total, percentage, result
+    const isESE = targetClass.examName === "ESE";
+    let total = 0;
+    let totalGradePoints = 0;
+    let totalCredits = 0;
+    let fail = false;
+    let hasAbsent = false;
+
+    marks.forEach((val, idx) => {
+      const strVal = String(val || "").toUpperCase().trim();
+      if (isESE) {
+        if (strVal === "AB" || strVal === "U" || strVal === "U*" || strVal === "FAIL") fail = true;
+        const gp = getGradePoint(strVal, targetClass.eseGradingSystem || "System 2");
+        const credits = (targetClass.courseDetails && targetClass.courseDetails[idx]?.credits !== undefined)
+          ? Number(targetClass.courseDetails[idx].credits)
+          : 3;
+        totalGradePoints += (gp * credits);
+        totalCredits += credits;
+      } else {
+        if (strVal === "AB" || strVal === "A") {
+          fail = true;
+          hasAbsent = true;
+        } else {
+          const numVal = Number(strVal || 0);
+          total += (isNaN(numVal) ? 0 : numVal);
+          if (numVal < targetClass.passMark) fail = true;
+        }
+      }
+    });
+
+    const maxTotal = isESE ? count * 10 : count * (targetClass.markPerSubject || 50);
+    let percentage = maxTotal > 0 ? (total / maxTotal) * 100 : 0;
+    if (isESE) {
+      total = totalCredits > 0 ? Number((totalGradePoints / totalCredits).toFixed(2)) : 0;
+      percentage = Math.round(total * 10);
+    }
+
+    student.total = total;
+    student.percentage = Math.round(percentage);
+    student.result = fail ? "Fail" : (hasAbsent ? "-" : "Pass");
+
+    students[studentIdx] = student;
+
+    // 6. Persist to MongoDB
+    await ClassData.findByIdAndUpdate(
+      targetClass._id,
+      { $set: { students } },
+      { new: true }
+    );
+
+    return res.json({
+      success: true,
+      message: `Updated mark to "${newMarkStr}" for student ${regNo} in ${targetClass.examName} (${targetClass.className})`,
+      className: targetClass.className,
+      examName: targetClass.examName,
+      regNo: student.regNo,
+      subjectCode: targetClass.subjects?.[subjIdx] || subjectCode,
+      newMark: newMarkStr,
+      total: student.total,
+      result: student.result
+    });
+  } catch (err) {
+    console.error("Error in sync-student-mark:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // DELETE A CLASS
 router.delete("/:className", async (req, res) => {
   try {
