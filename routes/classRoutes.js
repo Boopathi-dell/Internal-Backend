@@ -965,6 +965,164 @@ router.post("/sync-student-mark", async (req, res) => {
   }
 });
 
+// BATCH SYNC MULTIPLE STUDENT MARKS BACK TO SOURCE CLASSES
+router.post("/sync-batch-marks", async (req, res) => {
+  try {
+    const { updates, department, yearSemSec, isAdmin } = req.body;
+    if (!Array.isArray(updates) || updates.length === 0) {
+      return res.json({ success: true, count: 0, message: "No updates provided." });
+    }
+
+    const yssClean = String(yearSemSec || "").replace(/\s+/g, "");
+    const query = { isDeleted: { $ne: true } };
+    if (department) query.department = department;
+
+    const cohortClasses = await ClassData.find(query);
+    const matchedCohortClasses = cohortClasses.filter(c =>
+      String(c.yearSemSec || "").replace(/\s+/g, "") === yssClean
+    );
+
+    let updatedCount = 0;
+    const modifiedClassesMap = new Map();
+
+    for (const update of updates) {
+      const { regNo, examName, candidateExamNames, subjectCode, subjectName, mark } = update;
+      if (!regNo || (!subjectCode && !subjectName)) continue;
+
+      const normReg = String(regNo).replace(/\s+/g, "").toUpperCase();
+      const cleanSubjCode = String(subjectCode || "").toLowerCase().replace(/[\s\-_]/g, "");
+      const cleanSubjName = String(subjectName || "").toLowerCase().replace(/[\s\-_]/g, "");
+
+      const examsToTry = Array.from(new Set([
+        ...(Array.isArray(candidateExamNames) ? candidateExamNames : []),
+        examName
+      ])).filter(Boolean);
+
+      let targetClass = null;
+      let bestScore = -1;
+      for (const cls of matchedCohortClasses) {
+        for (const cand of examsToTry) {
+          const priority = getExamSyncPriority(cand, cls.examName || "");
+          if (priority > bestScore) {
+            bestScore = priority;
+            targetClass = cls;
+          }
+        }
+      }
+
+      if (!targetClass) continue;
+      if (!isAdmin && targetClass.allowEditing === false) continue;
+
+      let subjIdx = -1;
+      const count = Math.max(targetClass.subjects?.length || 0, targetClass.courseDetails?.length || 0);
+      for (let i = 0; i < count; i++) {
+        const sRaw = String(targetClass.subjects?.[i] || "").toLowerCase().replace(/[\s\-_]/g, "");
+        const cd = targetClass.courseDetails?.[i];
+        const cCode = String(cd?.courseCode || "").toLowerCase().replace(/[\s\-_]/g, "");
+        const cName = String(cd?.courseName || "").toLowerCase().replace(/[\s\-_]/g, "");
+        const cShort = String(cd?.shortName || "").toLowerCase().replace(/[\s\-_]/g, "");
+
+        if (cleanSubjCode && (sRaw === cleanSubjCode || cCode === cleanSubjCode)) {
+          subjIdx = i;
+          break;
+        }
+        if (cleanSubjName && (sRaw === cleanSubjName || cName === cleanSubjName || cShort === cleanSubjName)) {
+          subjIdx = i;
+          break;
+        }
+        if (cleanSubjCode && cleanSubjName && sRaw === `${cleanSubjCode}${cleanSubjName}`) {
+          subjIdx = i;
+          break;
+        }
+      }
+
+      if (subjIdx === -1 && cleanSubjCode) {
+        for (let i = 0; i < count; i++) {
+          const sRaw = String(targetClass.subjects?.[i] || "").trim().toLowerCase();
+          const firstToken = sRaw.split(/[\s–\-:|/]+/)[0];
+          if (firstToken && firstToken === String(subjectCode || "").trim().toLowerCase()) {
+            subjIdx = i;
+            break;
+          }
+        }
+      }
+
+      if (subjIdx === -1) continue;
+
+      const students = targetClass.students || [];
+      const studentIdx = students.findIndex(s => String(s.regNo || "").replace(/\s+/g, "").toUpperCase() === normReg);
+      if (studentIdx === -1) continue;
+
+      const student = students[studentIdx].toObject ? students[studentIdx].toObject() : { ...students[studentIdx] };
+      const marks = Array.isArray(student.marks) ? [...student.marks] : [];
+      while (marks.length < count) marks.push("");
+
+      const newMarkStr = String(mark !== undefined && mark !== null ? mark : "").trim();
+      marks[subjIdx] = newMarkStr;
+      student.marks = marks;
+
+      const isESE = targetClass.examName === "ESE";
+      let total = 0;
+      let totalGradePoints = 0;
+      let totalCredits = 0;
+      let fail = false;
+      let hasAbsent = false;
+
+      marks.forEach((val, idx) => {
+        const strVal = String(val || "").toUpperCase().trim();
+        if (isESE) {
+          if (strVal === "AB" || strVal === "U" || strVal === "U*" || strVal === "FAIL") fail = true;
+          const gp = getGradePoint(strVal, targetClass.eseGradingSystem || "System 2");
+          const credits = (targetClass.courseDetails && targetClass.courseDetails[idx]?.credits !== undefined)
+            ? Number(targetClass.courseDetails[idx].credits)
+            : 3;
+          totalGradePoints += (gp * credits);
+          totalCredits += credits;
+        } else {
+          if (strVal === "AB" || strVal === "A") {
+            fail = true;
+            hasAbsent = true;
+          } else {
+            const numVal = Number(strVal || 0);
+            total += (isNaN(numVal) ? 0 : numVal);
+            if (numVal < targetClass.passMark) fail = true;
+          }
+        }
+      });
+
+      const maxTotal = isESE ? count * 10 : count * (targetClass.markPerSubject || 50);
+      let percentage = maxTotal > 0 ? (total / maxTotal) * 100 : 0;
+      if (isESE) {
+        total = totalCredits > 0 ? Number((totalGradePoints / totalCredits).toFixed(2)) : 0;
+        percentage = Math.round(total * 10);
+      }
+
+      student.total = total;
+      student.percentage = Math.round(percentage);
+      student.result = fail ? "Fail" : (hasAbsent ? "-" : "Pass");
+
+      students[studentIdx] = student;
+      targetClass.students = students;
+      modifiedClassesMap.set(String(targetClass._id), targetClass);
+      updatedCount++;
+    }
+
+    for (const [clsId, clsObj] of modifiedClassesMap.entries()) {
+      await ClassData.findByIdAndUpdate(clsId, { $set: { students: clsObj.students } });
+    }
+
+    return res.json({
+      success: true,
+      count: updatedCount,
+      classesUpdated: modifiedClassesMap.size,
+      message: `Successfully saved ${updatedCount} marks across ${modifiedClassesMap.size} classes in database.`
+    });
+  } catch (err) {
+    console.error("Error in sync-batch-marks:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // DELETE A CLASS
 router.delete("/:className", async (req, res) => {
   try {
