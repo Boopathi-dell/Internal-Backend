@@ -21,6 +21,14 @@ const internalMarkTemplateSchema = new mongoose.Schema({
   passMark: { type: Number, default: 0 },
   isActive: { type: Boolean, default: true },
   headerImage: { type: String, default: "" },
+  headerSubBarLayout: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {
+      preset: "coe_balanced",
+      line1: { left: "dept", center: "session", right: "yearSemSec" },
+      line2: { left: "subject", center: "none", right: "date" }
+    }
+  },
   columns: [columnSchema],
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }

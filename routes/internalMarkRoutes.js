@@ -95,7 +95,7 @@ const normalizePassMark = (val) => {
 // Create new template
 router.post("/", async (req, res) => {
   try {
-    const { templateName, regulation, courseCategory, printOrientation, passMark, columns, isActive, headerImage } = req.body;
+    const { templateName, regulation, courseCategory, printOrientation, passMark, columns, isActive, headerImage, headerSubBarLayout } = req.body;
     const category = normalizeCategory(courseCategory);
     const orientation = normalizeOrientation(printOrientation, category);
 
@@ -110,6 +110,11 @@ router.post("/", async (req, res) => {
       columns, 
       isActive,
       headerImage: headerImage || "",
+      headerSubBarLayout: headerSubBarLayout || {
+        preset: "coe_balanced",
+        line1: { left: "dept", center: "session", right: "yearSemSec" },
+        line2: { left: "subject", center: "none", right: "date" }
+      },
       updatedAt: new Date()
     });
     await newTemplate.save();
@@ -122,7 +127,7 @@ router.post("/", async (req, res) => {
 // Update template
 router.put("/:id", async (req, res) => {
   try {
-    const { templateName, regulation, courseCategory, printOrientation, passMark, columns, isActive, headerImage } = req.body;
+    const { templateName, regulation, courseCategory, printOrientation, passMark, columns, isActive, headerImage, headerSubBarLayout } = req.body;
     const category = normalizeCategory(courseCategory);
     const orientation = normalizeOrientation(printOrientation, category);
 
@@ -137,7 +142,8 @@ router.put("/:id", async (req, res) => {
       isActive,
       updatedAt: new Date(),
       ...(passMark !== undefined ? { passMark: normalizePassMark(passMark) } : {}),
-      ...(headerImage !== undefined ? { headerImage } : {})
+      ...(headerImage !== undefined ? { headerImage } : {}),
+      ...(headerSubBarLayout !== undefined ? { headerSubBarLayout } : {})
     };
     const updated = await InternalMarkTemplate.findByIdAndUpdate(
       req.params.id,
