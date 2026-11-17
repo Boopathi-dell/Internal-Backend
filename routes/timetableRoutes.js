@@ -659,10 +659,21 @@ async function cascadeFacultyNameChange(oldName, newName, department = "CSE") {
 // GET all staff members
 router.get("/staff", async (req, res) => {
   try {
-    const { department } = req.query;
+    const { department, strict } = req.query;
     const filter = {};
-    if (department && department !== "All") {
-      filter.department = { $regex: new RegExp(`^${department}$`, "i") };
+    if (department && department !== "All" && department !== "ALL") {
+      if (strict === "true") {
+        filter.department = { $regex: new RegExp(`^${department}$`, "i") };
+      } else {
+        // Return faculty belonging to this department OR service/shared departments (like TAPC, MATHS, S&H, etc.)
+        filter.$or = [
+          { department: { $regex: new RegExp(`^${department}$`, "i") } },
+          { department: { $in: ["TAPC", "MATHS", "SCIENCE & HUMANITIES", "S&H", "ENGLISH", "PHYSICS", "CHEMISTRY", "PLACEMENT", "TRAINING"] } },
+          { department: { $exists: false } },
+          { department: "" },
+          { department: null }
+        ];
+      }
     }
     const staff = await Staff.find(filter).sort({ name: 1 });
     res.json(staff);
@@ -681,8 +692,8 @@ router.post("/staff", async (req, res) => {
     const cleanName = name.trim();
     const deptUpper = (department || "CSE").toUpperCase();
 
-    // Check if an existing staff matches fuzzy name
-    const allStaff = await Staff.find({ department: deptUpper });
+    // Check if an existing staff matches fuzzy name across staff collection
+    const allStaff = await Staff.find({});
     const existing = allStaff.find(s => isSameFacultyName(s.name, cleanName));
 
     if (existing) {
@@ -692,6 +703,7 @@ router.post("/staff", async (req, res) => {
       if (staffCode) existing.staffCode = staffCode;
       if (email) existing.email = email;
       if (designation) existing.designation = designation;
+      if (department) existing.department = deptUpper;
       if (maxHoursPerWeek) existing.maxHoursPerWeek = Number(maxHoursPerWeek);
       if (maxTheory) existing.maxTheory = Number(maxTheory);
       if (maxLab) existing.maxLab = Number(maxLab);
@@ -923,9 +935,9 @@ async function unassignFacultyEverywhere(facultyName, department = "CSE") {
   if (!facultyName) return { allocations: null, classes: null, facultySchedules: null };
   const deptUpper = (department || "CSE").toUpperCase();
 
-  // 1. Delete from Staff collection (any records matching this name)
+  // 1. Delete from Staff collection (any records matching this name across departments)
   try {
-    const allStaff = await Staff.find({ department: deptUpper });
+    const allStaff = await Staff.find({});
     for (const s of allStaff) {
       if (isSameFacultyName(s.name, facultyName)) {
         await Staff.findByIdAndDelete(s._id);
@@ -974,7 +986,7 @@ async function unassignFacultyEverywhere(facultyName, department = "CSE") {
   let updatedClasses = null;
   let updatedFacultySchedules = null;
   const allSchedDocs = await TimetableSchedule.find({});
-  const remainingStaff = await Staff.find({ department: deptUpper });
+  const remainingStaff = await Staff.find({});
 
   for (const sDoc of allSchedDocs) {
     let modified = false;
@@ -3128,7 +3140,7 @@ router.post("/generate", async (req, res) => {
 
 // Helper: Rebuild faculty schedules across all staff members from classes in doc
 const buildFacultySchedules = async (doc, department) => {
-  const allStaffMembers = await Staff.find({ department: department || doc.department || "CSE" });
+  const allStaffMembers = await Staff.find({});
   const facultySchedules = {};
   allStaffMembers.forEach(s => {
     facultySchedules[s.name] = {
@@ -3952,7 +3964,7 @@ router.post("/schedule/sync-faculty", async (req, res) => {
     await doc.save();
 
     // Recalculate facultySchedules for all staff
-    const allStaffMembers = await Staff.find({ department });
+    const allStaffMembers = await Staff.find({});
     const facultySchedules = {};
     allStaffMembers.forEach(s => {
       facultySchedules[s.name] = {
