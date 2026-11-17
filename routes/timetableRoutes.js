@@ -357,6 +357,148 @@ const makeFreeSlot = (period, time, room = "-") => ({
   room
 });
 
+// Helper: Flexible schedule lookup with academic year normalization fallback
+const findScheduleWithFallback = async (department, academicYear, semesterType) => {
+  let doc = await TimetableSchedule.findOne({ department, academicYear, semesterType });
+  if (!doc && academicYear) {
+    const yearNorm = String(academicYear).replace(/\s+/g, "");
+    const altYear = yearNorm.includes("-") && yearNorm.split("-")[1].length === 2
+      ? `${yearNorm.split("-")[0]}-20${yearNorm.split("-")[1]}`
+      : (yearNorm.includes("-") && yearNorm.split("-")[1].length === 4 ? `${yearNorm.split("-")[0]}-${yearNorm.split("-")[1].slice(2)}` : null);
+    if (altYear) {
+      doc = await TimetableSchedule.findOne({ department, academicYear: altYear, semesterType });
+    }
+    if (!doc && yearNorm !== academicYear) {
+      doc = await TimetableSchedule.findOne({ department, academicYear: yearNorm, semesterType });
+    }
+  }
+  return doc;
+};
+
+// Helper: Flexible allocation lookup with academic year normalization fallback
+const findAllocationWithFallback = async (department, academicYear, semesterType) => {
+  let doc = await TimetableAllocation.findOne({ department, academicYear, semesterType });
+  if (!doc && academicYear) {
+    const yearNorm = String(academicYear).replace(/\s+/g, "");
+    const altYear = yearNorm.includes("-") && yearNorm.split("-")[1].length === 2
+      ? `${yearNorm.split("-")[0]}-20${yearNorm.split("-")[1]}`
+      : (yearNorm.includes("-") && yearNorm.split("-")[1].length === 4 ? `${yearNorm.split("-")[0]}-${yearNorm.split("-")[1].slice(2)}` : null);
+    if (altYear) {
+      doc = await TimetableAllocation.findOne({ department, academicYear: altYear, semesterType });
+    }
+    if (!doc && yearNorm !== academicYear) {
+      doc = await TimetableAllocation.findOne({ department, academicYear: yearNorm, semesterType });
+    }
+  }
+  return doc;
+};
+
+// Helper: Zero-Free Slot Guarantee Filler
+// Ensures NO empty / Free periods are ever left on any class timetable.
+// Fills spare/deficit slots with:
+// 1. Any unplaced deficit theory/training subject from the class (even in Period 7)
+// 2. Class Core Theory Revision / Tutorial hour (with free faculty)
+// 3. Seminar / Technical Presentation
+// 4. Library / Digital Library
+// 5. Class Advisor Mentoring & Counseling
+const fillRemainingEmptySlot = (ck, day, p, time, classAllocs, isFacultyFreeFn, markFacultyBusyFn, classAdvisor = "") => {
+  // 1. Check if any theory/elective subject in class still has unplaced deficit hours
+  const deficitSubjects = (classAllocs || []).filter(a => {
+    if (isLibraryItem(a) || isSeminarItem(a)) return false;
+    if (isPhysicalLab(a)) return false;
+    const req = getAllocHours(a);
+    const placed = (a.placedCount || 0);
+    return placed < req;
+  });
+
+  for (const cand of deficitSubjects) {
+    const facs = getSlotFacultyList(cand);
+    const facsFree = facs.length === 0 || facs.every(f => isFacultyFreeFn(f, day, p));
+    if (facsFree) {
+      if (typeof markFacultyBusyFn === "function") {
+        facs.forEach(f => markFacultyBusyFn(f, day, p, ck));
+      }
+      cand.placedCount = (cand.placedCount || 0) + 1;
+      return buildOccupiedSlotObject(cand, p, time);
+    }
+  }
+
+  // 2. Class Theory Revision / Tutorial Hour (with an available faculty from the class)
+  const theorySubjects = (classAllocs || []).filter(a => isPureTheorySubject(a) && !isPhysicalLab(a));
+  theorySubjects.sort((a, b) => {
+    const isToughA = isMathsOrToughSubject(a) ? 1 : 0;
+    const isToughB = isMathsOrToughSubject(b) ? 1 : 0;
+    return isToughB - isToughA;
+  });
+
+  for (const cand of theorySubjects) {
+    const facs = getSlotFacultyList(cand);
+    if (facs.length > 0 && facs.every(f => isFacultyFreeFn(f, day, p))) {
+      if (typeof markFacultyBusyFn === "function") {
+        facs.forEach(f => markFacultyBusyFn(f, day, p, ck));
+      }
+      const slotObj = buildOccupiedSlotObject(cand, p, time);
+      slotObj.shortName = `${cand.shortName || cand.subjectCode} (Rev)`;
+      slotObj.subjectName = `${cand.subjectName || cand.name} (Revision / Tutorial)`;
+      return slotObj;
+    }
+  }
+
+  // 3. Class Seminar / Technical Presentation
+  const semItem = (classAllocs || []).find(isSeminarItem);
+  if (semItem) {
+    return buildOccupiedSlotObject({
+      subjectCode: semItem.subjectCode || "SEM",
+      subjectName: semItem.subjectName || "Seminar / Technical Presentation",
+      shortName: semItem.shortName || "SEM",
+      facultyNames: [],
+      type: "Seminar",
+      difficulty: "Light",
+      room: "Seminar Hall"
+    }, p, time);
+  }
+
+  // 4. Class Library / Digital Library
+  const libItem = (classAllocs || []).find(isLibraryItem);
+  if (libItem) {
+    return buildOccupiedSlotObject({
+      subjectCode: libItem.subjectCode || "LIB",
+      subjectName: libItem.subjectName || "Library / Digital Library",
+      shortName: libItem.shortName || "LIB",
+      facultyNames: [],
+      type: "Library",
+      difficulty: "Light",
+      room: "Library"
+    }, p, time);
+  }
+
+  // 5. Default Seminar for Afternoon Periods (P5, P6, P7)
+  if (p >= 5) {
+    return buildOccupiedSlotObject({
+      subjectCode: "SEM",
+      subjectName: "Seminar / Technical Presentation",
+      shortName: "SEM",
+      facultyNames: [],
+      type: "Seminar",
+      difficulty: "Light",
+      room: "Seminar Hall"
+    }, p, time);
+  }
+
+  // 6. Class Advisor Mentoring / Counseling
+  const advisorName = String(classAdvisor || "").trim();
+  return buildOccupiedSlotObject({
+    subjectCode: "LIB",
+    subjectName: "Library / Digital Library & Mentoring",
+    shortName: "LIB",
+    facultyNames: (advisorName && advisorName !== "-") ? [advisorName] : [],
+    facultyName: (advisorName && advisorName !== "-") ? advisorName : "-",
+    type: "Library",
+    difficulty: "Light",
+    room: "Library"
+  }, p, time);
+};
+
 // CASCADE helper: automatically updates allocations, schedule slots, and faculty routines everywhere
 async function cascadeFacultyNameChange(oldName, newName, department = "CSE") {
   if (!oldName || !newName) {
@@ -1937,12 +2079,12 @@ const createGridSolver = ({ classGrid, classKeys, classGroups, facultyMaxWorkloa
     return false;
   };
 
-  const getDeficitCandidates = (ck) => {
+  const getDeficitCandidates = (ck, allowEmergencyBlocks = false) => {
     const clsAllocs = classGroups[ck]?.allocations || [];
     return clsAllocs.filter(a => {
       const singlesAllowed = a.parsedPattern ? (a.parsedPattern.singles || 0) : 0;
-      if (isContinuousBlockSubject(a) && singlesAllowed === 0) {
-        return false; // Never split unplaced Labs or continuous Training blocks into single 1h periods
+      if (!allowEmergencyBlocks && isContinuousBlockSubject(a) && singlesAllowed === 0) {
+        return false; // In strict/early tiers, try to keep blocks intact
       }
       return canSubjectTakeMoreHoursInClass(ck, a);
     }).sort((a, b) => {
@@ -1960,7 +2102,7 @@ const createGridSolver = ({ classGrid, classKeys, classGroups, facultyMaxWorkloa
 
   // Try to fill one empty slot (ck, day, p) under `tier` using Direct -> 1-Slot Swap -> 2-Hop Chain Swap -> Cross-Class Swap
   const tryFillEmptySlotWithTier = (ck, day, p, tier, tierIdx) => {
-    const deficitList = getDeficitCandidates(ck);
+    const deficitList = getDeficitCandidates(ck, tierIdx >= 3);
     if (deficitList.length === 0) return false;
 
     // Operator 1: Scored direct placement (picks lowest fatigue/best balance candidate)
@@ -2785,52 +2927,24 @@ router.post("/generate", async (req, res) => {
     // --- STEP C: TIERED ZERO-WASTED-FREE SOLVER (DIRECT + 1-SWAP + 2-HOP SWAP + CROSS-CLASS LIBERATION) ---
     runTieredDeficitSolver(classKeys);
 
-    // Fill any truly unallocated spare slots with allocated LIB/SEM under quota or clean FREE
+    // --- ZERO-FREE GUARANTEE: Fill any truly unallocated spare slots with valid curriculum hours ---
     classKeys.forEach(ck => {
       const clsAllocations = classGroups[ck].allocations || [];
+      const classAdvisor = classAdvisors?.[ck] || "";
       DAYS.forEach(day => {
         PERIODS.forEach(p => {
-          if (classGrid[ck][day][p] !== null) return;
+          if (classGrid[ck][day][p] !== null && !isFreeSlot(classGrid[ck][day][p])) return;
 
-          const libItems = clsAllocations.filter(isLibraryItem);
-          const semItems = clsAllocations.filter(isSeminarItem);
-          const libItem = libItems[0];
-          const semItem = semItems[0];
-
-          const libMaxAllowed = libItems.reduce((sum, a) => sum + getAllocHours(a), 0);
-          const libPlacedTotal = DAYS.reduce((acc, d) => acc + PERIODS.filter(pr => classGrid[ck][d][pr] && isLibraryItem(classGrid[ck][d][pr])).length, 0);
-          const canTakeLib = Boolean(libItem) && libPlacedTotal < libMaxAllowed;
-
-          const semMaxAllowed = semItems.reduce((sum, a) => sum + getAllocHours(a), 0);
-          const semPlacedTotal = DAYS.reduce((acc, d) => acc + PERIODS.filter(pr => classGrid[ck][d][pr] && isSeminarItem(classGrid[ck][d][pr])).length, 0);
-          const canTakeSem = Boolean(semItem) && semPlacedTotal < semMaxAllowed;
-
-          const hasLibToday = PERIODS.some(pr => classGrid[ck][day][pr] && isLibraryItem(classGrid[ck][day][pr]));
-          const hasSemToday = PERIODS.some(pr => classGrid[ck][day][pr] && isSeminarItem(classGrid[ck][day][pr]));
-
-          if (p !== 1 && !hasLibToday && canTakeLib) {
-            classGrid[ck][day][p] = buildOccupiedSlotObject({
-              subjectCode: libItem.subjectCode || "LIB",
-              subjectName: libItem.subjectName || "Library / Digital Library",
-              shortName: libItem.shortName || "LIB",
-              facultyNames: [],
-              type: "Library",
-              difficulty: "Light",
-              room: "Library"
-            }, p, timings[p] || DEFAULT_TIMINGS[p]);
-          } else if (p !== 1 && !hasSemToday && canTakeSem) {
-            classGrid[ck][day][p] = buildOccupiedSlotObject({
-              subjectCode: semItem.subjectCode || "SEM",
-              subjectName: semItem.subjectName || "Seminar / Technical Presentation",
-              shortName: semItem.shortName || "SEM",
-              facultyNames: [],
-              type: "Seminar",
-              difficulty: "Light",
-              room: "Seminar Hall"
-            }, p, timings[p] || DEFAULT_TIMINGS[p]);
-          } else {
-            classGrid[ck][day][p] = makeFreeSlot(p, timings[p] || DEFAULT_TIMINGS[p]);
-          }
+          classGrid[ck][day][p] = fillRemainingEmptySlot(
+            ck,
+            day,
+            p,
+            timings[p] || DEFAULT_TIMINGS[p],
+            clsAllocations,
+            (fac, d, pr) => isFacultyFree(fac, d, pr),
+            (fac, d, pr, cKey) => markFacultyBusy(fac, d, pr, cKey),
+            classAdvisor
+          );
         });
       });
     });
@@ -3104,11 +3218,11 @@ const sanitizeExcessSubjectHours = async (schedule, department) => {
     return false;
   }
 
-  const allocDoc = await TimetableAllocation.findOne({
-    department: department || schedule.department || "CSE",
-    academicYear: schedule.academicYear || "2026-2027",
-    semesterType: schedule.semesterType || "Even"
-  });
+  const allocDoc = await findAllocationWithFallback(
+    department || schedule.department || "CSE",
+    schedule.academicYear || "2026-2027",
+    schedule.semesterType || "Even"
+  );
   const allAllocations = allocDoc?.allocations || [];
   let modified = false;
 
@@ -3216,11 +3330,11 @@ const healScheduleFreeSlots = async (schedule, department) => {
     return false;
   }
 
-  const allocDoc = await TimetableAllocation.findOne({
-    department: department || schedule.department || "CSE",
-    academicYear: schedule.academicYear || "2026-2027",
-    semesterType: schedule.semesterType || "Even"
-  });
+  const allocDoc = await findAllocationWithFallback(
+    department || schedule.department || "CSE",
+    schedule.academicYear || "2026-2027",
+    schedule.semesterType || "Even"
+  );
   const allAllocations = allocDoc?.allocations || [];
 
   const allStaffMembers = await Staff.find({ department: department || schedule.department || "CSE" });
@@ -3591,45 +3705,18 @@ const healScheduleFreeSlots = async (schedule, department) => {
         const origTime = prevSlot?.time || timings[p] || DEFAULT_TIMINGS[p];
         let newSlot = classGrid[ck]?.[day]?.[p] || null;
 
-        if (!newSlot) {
-          const libItems = clsAllocs.filter(isLibraryItem);
-          const semItems = clsAllocs.filter(isSeminarItem);
-          const libItem = libItems[0];
-          const semItem = semItems[0];
-
-          const semMax = semItems.reduce((sum, a) => sum + getAllocHours(a), 0);
-          const semPlaced = DAYS.reduce((acc, d) => acc + PERIODS.filter(pr => classGrid[ck]?.[d]?.[pr] && isSeminarItem(classGrid[ck][d][pr])).length, 0);
-          const libMax = libItems.reduce((sum, a) => sum + getAllocHours(a), 0);
-          const libPlaced = DAYS.reduce((acc, d) => acc + PERIODS.filter(pr => classGrid[ck]?.[d]?.[pr] && isLibraryItem(classGrid[ck][d][pr])).length, 0);
-
-          const hasSemToday = PERIODS.some(pr => classGrid[ck]?.[day]?.[pr] && isSeminarItem(classGrid[ck][day][pr]));
-          const hasLibToday = PERIODS.some(pr => classGrid[ck]?.[day]?.[pr] && isLibraryItem(classGrid[ck][day][pr]));
-
-          if (p !== 1 && !hasSemToday && semItem && semPlaced < semMax) {
-            newSlot = buildOccupiedSlotObject({
-              subjectCode: semItem.subjectCode || "SEM",
-              subjectName: semItem.subjectName || "Seminar / Technical Presentation",
-              shortName: semItem.shortName || "SEM",
-              facultyNames: [],
-              type: "Seminar",
-              difficulty: "Light",
-              room: "Seminar Hall"
-            }, p, origTime);
-            classGrid[ck][day][p] = newSlot;
-          } else if (p !== 1 && !hasLibToday && libItem && libPlaced < libMax) {
-            newSlot = buildOccupiedSlotObject({
-              subjectCode: libItem.subjectCode || "LIB",
-              subjectName: libItem.subjectName || "Library / Digital Library",
-              shortName: libItem.shortName || "LIB",
-              facultyNames: [],
-              type: "Library",
-              difficulty: "Light",
-              room: "Library"
-            }, p, origTime);
-            classGrid[ck][day][p] = newSlot;
-          } else {
-            newSlot = makeFreeSlot(p, origTime);
-          }
+        if (!newSlot || isFreeSlot(newSlot)) {
+          newSlot = fillRemainingEmptySlot(
+            ck,
+            day,
+            p,
+            origTime,
+            clsAllocs,
+            (fac, d, pr) => !hasFacBusy(fac, d, pr),
+            (fac, d, pr) => addFacBusy(fac, d, pr),
+            allocDoc?.classAdvisors?.[ck] || ""
+          );
+          classGrid[ck][day][p] = newSlot;
         }
 
         const prevCode = (prevSlot?.subjectCode || "").toUpperCase();
@@ -3637,7 +3724,7 @@ const healScheduleFreeSlots = async (schedule, department) => {
         const prevFac = (prevSlot?.facultyName || "-").trim();
         const nextFac = (newSlot?.facultyName || "-").trim();
 
-        if (!prevSlot || prevCode !== nextCode || prevFac !== nextFac || prevSlot.type !== newSlot.type) {
+        if (!prevSlot || prevCode !== nextCode || prevFac !== nextFac || prevSlot.type !== newSlot.type || isFreeSlot(prevSlot)) {
           modified = true;
         }
         slots[idx] = { ...newSlot, period: p, time: origTime };
@@ -3652,7 +3739,7 @@ const healScheduleFreeSlots = async (schedule, department) => {
 router.get("/schedule", async (req, res) => {
   try {
     const { department = "CSE", academicYear = "2026-2027", semesterType = "Odd" } = req.query;
-    let schedule = await TimetableSchedule.findOne({ department, academicYear, semesterType });
+    let schedule = await findScheduleWithFallback(department, academicYear, semesterType);
     if (schedule && !schedule.isLocked) {
       const sanitized = await sanitizeExcessSubjectHours(schedule, department);
       const healed = await healScheduleFreeSlots(schedule, department);
@@ -3690,7 +3777,7 @@ router.get("/schedule", async (req, res) => {
 router.post("/schedule/fill-free", async (req, res) => {
   try {
     const { department = "CSE", academicYear = "2026-2027", semesterType = "Odd" } = req.body;
-    let schedule = await TimetableSchedule.findOne({ department, academicYear, semesterType });
+    let schedule = await findScheduleWithFallback(department, academicYear, semesterType);
     if (!schedule) return res.status(404).json({ error: "Schedule not found" });
 
     const sanitized = await sanitizeExcessSubjectHours(schedule, department);
