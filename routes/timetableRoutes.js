@@ -3709,11 +3709,21 @@ router.post("/schedule/fill-free", async (req, res) => {
   }
 });
 
-// UPDATE specific cell in schedule (Manual override)
+// UPDATE specific cell in schedule (Manual override - supports single slot or continuous blocks e.g. CDS 3-period)
 router.put("/schedule/cell", async (req, res) => {
   try {
-    const { department = "CSE", academicYear = "2026-2027", semesterType = "Odd", classKey, day, period, updatedSlot } = req.body;
-    const doc = await TimetableSchedule.findOne({ department, academicYear, semesterType });
+    const { department = "CSE", academicYear = "2026-2027", semesterType = "Odd", classKey, day, period, updatedSlot, periods } = req.body;
+    let doc = await TimetableSchedule.findOne({ department, academicYear, semesterType });
+    if (!doc && academicYear) {
+      // Fallback matching for academicYear variations (e.g. "2026-2027" vs "2026-27")
+      const yearNorm = academicYear.replace(/\s+/g, "");
+      const altYear = yearNorm.includes("-") && yearNorm.split("-")[1].length === 2
+        ? `${yearNorm.split("-")[0]}-20${yearNorm.split("-")[1]}`
+        : (yearNorm.includes("-") && yearNorm.split("-")[1].length === 4 ? `${yearNorm.split("-")[0]}-${yearNorm.split("-")[1].slice(2)}` : null);
+      if (altYear) {
+        doc = await TimetableSchedule.findOne({ department, academicYear: altYear, semesterType });
+      }
+    }
     if (!doc) return res.status(404).json({ error: "Schedule not found" });
 
     // Check if locked
@@ -3722,18 +3732,47 @@ router.put("/schedule/cell", async (req, res) => {
     }
 
     const cls = doc.classes.find(c => c.classKey === classKey);
-    if (!cls || !cls.days[day]) return res.status(404).json({ error: "Class or Day not found" });
+    if (!cls || !cls.days || !cls.days[day]) return res.status(404).json({ error: "Class or Day not found" });
 
-    const pIdx = cls.days[day].findIndex(p => p.period === Number(period));
-    if (pIdx !== -1) {
-      cls.days[day][pIdx] = { ...cls.days[day][pIdx], ...updatedSlot };
+    // Determine target periods to update (supports single period or multiple periods e.g. 3-period block for CDS/Lab)
+    const targetPeriods = (Array.isArray(periods) && periods.length > 0)
+      ? periods.map(Number)
+      : [Number(period)];
+
+    let updatedCount = 0;
+    targetPeriods.forEach(pNum => {
+      const pIdx = cls.days[day].findIndex(p => p.period === pNum);
+      if (pIdx !== -1) {
+        const existing = cls.days[day][pIdx];
+        const existingObj = existing.toObject ? existing.toObject() : existing;
+        const newSlotData = {
+          ...existingObj,
+          ...updatedSlot,
+          period: pNum,
+          time: existing.time || updatedSlot.time,
+          isPinned: Boolean(updatedSlot.isPinned)
+        };
+        // Cleanly assign into Mongoose subdocument to prevent call stack overflow from circular references
+        Object.assign(existing, newSlotData);
+        updatedCount++;
+      }
+    });
+
+    if (updatedCount > 0) {
       doc.markModified("classes");
       const facultySchedules = await buildFacultySchedules(doc, department);
       doc.facultySchedules = facultySchedules;
       doc.markModified("facultySchedules");
       await doc.save();
 
-      return res.json({ success: true, schedule: doc, facultySchedules, message: "Slot updated successfully!" });
+      return res.json({ 
+        success: true, 
+        schedule: doc, 
+        facultySchedules, 
+        message: updatedCount > 1 
+          ? `Updated ${updatedCount} continuous periods successfully! Locked & Saved to database.`
+          : `Slot [Period ${period}] updated successfully! Locked & Saved to database.` 
+      });
     }
     res.status(400).json({ error: "Period slot not found" });
   } catch (err) {
