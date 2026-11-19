@@ -786,11 +786,16 @@ router.post("/sync-student-mark", async (req, res) => {
       subjectCode,
       subjectName,
       mark,
-      isAdmin
+      isAdmin,
+      allowStaffInlineEdit
     } = req.body;
 
     if (!regNo || (!subjectCode && !subjectName)) {
       return res.status(400).json({ error: "Missing required parameters (regNo, subjectCode)." });
+    }
+
+    if (!isAdmin && !allowStaffInlineEdit) {
+      return res.status(403).json({ error: "Staff inline editing is not allowed by administrator." });
     }
 
     let targetClass = null;
@@ -968,9 +973,13 @@ router.post("/sync-student-mark", async (req, res) => {
 // BATCH SYNC MULTIPLE STUDENT MARKS BACK TO SOURCE CLASSES
 router.post("/sync-batch-marks", async (req, res) => {
   try {
-    const { updates, department, yearSemSec, isAdmin } = req.body;
+    const { updates, department, yearSemSec, isAdmin, allowStaffInlineEdit } = req.body;
     if (!Array.isArray(updates) || updates.length === 0) {
       return res.json({ success: true, count: 0, message: "No updates provided." });
+    }
+
+    if (!isAdmin && !allowStaffInlineEdit) {
+      return res.status(403).json({ error: "Staff inline editing is not allowed by administrator." });
     }
 
     const yssClean = String(yearSemSec || "").replace(/\s+/g, "");

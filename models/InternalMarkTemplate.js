@@ -20,6 +20,7 @@ const internalMarkTemplateSchema = new mongoose.Schema({
   printOrientation: { type: String, enum: ["landscape", "portrait"], default: "landscape" },
   passMark: { type: Number, default: 0 },
   isActive: { type: Boolean, default: true },
+  allowStaffInlineEdit: { type: Boolean, default: false },
   headerImage: { type: String, default: "" },
   headerSubBarLayout: {
     type: mongoose.Schema.Types.Mixed,

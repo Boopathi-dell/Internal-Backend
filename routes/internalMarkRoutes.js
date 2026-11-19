@@ -95,7 +95,7 @@ const normalizePassMark = (val) => {
 // Create new template
 router.post("/", async (req, res) => {
   try {
-    const { templateName, regulation, courseCategory, printOrientation, passMark, columns, isActive, headerImage, headerSubBarLayout } = req.body;
+    const { templateName, regulation, courseCategory, printOrientation, passMark, columns, isActive, headerImage, headerSubBarLayout, allowStaffInlineEdit } = req.body;
     const category = normalizeCategory(courseCategory);
     const orientation = normalizeOrientation(printOrientation, category);
 
@@ -109,6 +109,7 @@ router.post("/", async (req, res) => {
       passMark: normalizePassMark(passMark),
       columns, 
       isActive,
+      allowStaffInlineEdit: Boolean(allowStaffInlineEdit),
       headerImage: headerImage || "",
       headerSubBarLayout: headerSubBarLayout || {
         preset: "coe_balanced",
@@ -127,7 +128,7 @@ router.post("/", async (req, res) => {
 // Update template
 router.put("/:id", async (req, res) => {
   try {
-    const { templateName, regulation, courseCategory, printOrientation, passMark, columns, isActive, headerImage, headerSubBarLayout } = req.body;
+    const { templateName, regulation, courseCategory, printOrientation, passMark, columns, isActive, headerImage, headerSubBarLayout, allowStaffInlineEdit } = req.body;
     const category = normalizeCategory(courseCategory);
     const orientation = normalizeOrientation(printOrientation, category);
 
@@ -141,6 +142,7 @@ router.put("/:id", async (req, res) => {
       columns,
       isActive,
       updatedAt: new Date(),
+      ...(allowStaffInlineEdit !== undefined ? { allowStaffInlineEdit: Boolean(allowStaffInlineEdit) } : {}),
       ...(passMark !== undefined ? { passMark: normalizePassMark(passMark) } : {}),
       ...(headerImage !== undefined ? { headerImage } : {}),
       ...(headerSubBarLayout !== undefined ? { headerSubBarLayout } : {})
@@ -151,6 +153,29 @@ router.put("/:id", async (req, res) => {
       { new: true }
     );
     res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Quick toggle staff inline edit permission (Admin allowed)
+router.post("/toggle-staff-inline-edit", async (req, res) => {
+  try {
+    const { templateId, allowStaffInlineEdit, applyToAll = true } = req.body;
+    const allowed = Boolean(allowStaffInlineEdit);
+
+    if (templateId && !applyToAll) {
+      const updated = await InternalMarkTemplate.findByIdAndUpdate(
+        templateId,
+        { allowStaffInlineEdit: allowed, updatedAt: new Date() },
+        { new: true }
+      );
+      return res.json({ success: true, allowStaffInlineEdit: allowed, template: updated });
+    }
+
+    // Apply to all templates so faculty can seamlessly edit inline across regulations/categories
+    await InternalMarkTemplate.updateMany({}, { allowStaffInlineEdit: allowed, updatedAt: new Date() });
+    return res.json({ success: true, allowStaffInlineEdit: allowed, message: `Staff inline editing ${allowed ? "allowed" : "locked"} across templates.` });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
