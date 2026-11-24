@@ -397,22 +397,42 @@ const findAllocationWithFallback = async (department, academicYear, semesterType
 // Ensures NO empty / Free periods are ever left on any class timetable.
 // Fills spare/deficit slots with:
 // 1. Any unplaced deficit theory/training subject from the class (even in Period 7)
-// 2. Class Core Theory Revision / Tutorial hour (with free faculty)
-// 3. Seminar / Technical Presentation
-// 4. Library / Digital Library
-// 5. Class Advisor Mentoring & Counseling
-const fillRemainingEmptySlot = (ck, day, p, time, classAllocs, isFacultyFreeFn, markFacultyBusyFn, classAdvisor = "") => {
+// 1. STRICT DEFICIT-ONLY ALLOCATION: Only place an allocated subject if its actual placed hours < required hours!
+// NEVER repeat a theory subject if already placed today (Strict max 1 per day).
+// NEVER exceed faculty total weekly hours quota.
+// NEVER duplicate theory subjects as "Revision". If no curriculum deficit remains, use SEM/LIB/MENTOR or return clean Free slot.
+const fillRemainingEmptySlot = (
+  ck,
+  day,
+  p,
+  time,
+  classAllocs,
+  isFacultyFreeFn,
+  markFacultyBusyFn,
+  classAdvisor = "",
+  getPlacedCountFn = null,
+  canFacTakeMoreFn = null,
+  isSubjOnDayFn = null
+) => {
   // 1. Check if any theory/elective subject in class still has unplaced deficit hours
   const deficitSubjects = (classAllocs || []).filter(a => {
     if (isLibraryItem(a) || isSeminarItem(a)) return false;
     if (isPhysicalLab(a)) return false;
     const req = getAllocHours(a);
-    const placed = (a.placedCount || 0);
-    return placed < req;
+    const placed = typeof getPlacedCountFn === "function" ? getPlacedCountFn(a) : (a.placedCount || 0);
+    return placed < req; // HARD CAP: NEVER place if already placed >= required!
   });
 
   for (const cand of deficitSubjects) {
+    // Check if subject is already placed on this day (Strict max 1 per day for regular theory)
+    if (typeof isSubjOnDayFn === "function" && isSubjOnDayFn(cand, day, p)) {
+      continue;
+    }
     const facs = getSlotFacultyList(cand);
+    // Check if faculty can take more hours (do not exceed weekly max)
+    if (typeof canFacTakeMoreFn === "function" && facs.length > 0 && !facs.every(f => canFacTakeMoreFn(f))) {
+      continue;
+    }
     const facsFree = facs.length === 0 || facs.every(f => isFacultyFreeFn(f, day, p));
     if (facsFree) {
       if (typeof markFacultyBusyFn === "function") {
@@ -423,80 +443,64 @@ const fillRemainingEmptySlot = (ck, day, p, time, classAllocs, isFacultyFreeFn, 
     }
   }
 
-  // 2. Class Theory Revision / Tutorial Hour (with an available faculty from the class)
-  const theorySubjects = (classAllocs || []).filter(a => isPureTheorySubject(a) && !isPhysicalLab(a));
-  theorySubjects.sort((a, b) => {
-    const isToughA = isMathsOrToughSubject(a) ? 1 : 0;
-    const isToughB = isMathsOrToughSubject(b) ? 1 : 0;
-    return isToughB - isToughA;
-  });
-
-  for (const cand of theorySubjects) {
-    const facs = getSlotFacultyList(cand);
-    if (facs.length > 0 && facs.every(f => isFacultyFreeFn(f, day, p))) {
-      if (typeof markFacultyBusyFn === "function") {
-        facs.forEach(f => markFacultyBusyFn(f, day, p, ck));
-      }
-      const slotObj = buildOccupiedSlotObject(cand, p, time);
-      slotObj.shortName = `${cand.shortName || cand.subjectCode} (Rev)`;
-      slotObj.subjectName = `${cand.subjectName || cand.name} (Revision / Tutorial)`;
-      return slotObj;
+  // 2. Class Seminar / Technical Presentation (Institutional Hour - Max 1/week)
+  const semItem = (classAllocs || []).find(isSeminarItem);
+  if (semItem) {
+    const semReq = getAllocHours(semItem) || 1;
+    const semPlaced = typeof getPlacedCountFn === "function" ? getPlacedCountFn(semItem) : 0;
+    if (semPlaced < semReq) {
+      return buildOccupiedSlotObject({
+        subjectCode: semItem.subjectCode || "SEM",
+        subjectName: semItem.subjectName || "Seminar / Technical Presentation",
+        shortName: semItem.shortName || "SEM",
+        facultyNames: [],
+        type: "Seminar",
+        difficulty: "Light",
+        room: "Seminar Hall"
+      }, p, time);
     }
   }
 
-  // 3. Class Seminar / Technical Presentation
-  const semItem = (classAllocs || []).find(isSeminarItem);
-  if (semItem) {
-    return buildOccupiedSlotObject({
-      subjectCode: semItem.subjectCode || "SEM",
-      subjectName: semItem.subjectName || "Seminar / Technical Presentation",
-      shortName: semItem.shortName || "SEM",
-      facultyNames: [],
-      type: "Seminar",
-      difficulty: "Light",
-      room: "Seminar Hall"
-    }, p, time);
-  }
-
-  // 4. Class Library / Digital Library
+  // 3. Class Library / Digital Library (Institutional Hour - Max 1 or 2/week)
   const libItem = (classAllocs || []).find(isLibraryItem);
   if (libItem) {
-    return buildOccupiedSlotObject({
-      subjectCode: libItem.subjectCode || "LIB",
-      subjectName: libItem.subjectName || "Library / Digital Library",
-      shortName: libItem.shortName || "LIB",
-      facultyNames: [],
-      type: "Library",
-      difficulty: "Light",
-      room: "Library"
-    }, p, time);
+    const libReq = getAllocHours(libItem) || 1;
+    const libPlaced = typeof getPlacedCountFn === "function" ? getPlacedCountFn(libItem) : 0;
+    if (libPlaced < libReq) {
+      return buildOccupiedSlotObject({
+        subjectCode: libItem.subjectCode || "LIB",
+        subjectName: libItem.subjectName || "Library / Digital Library",
+        shortName: libItem.shortName || "LIB",
+        facultyNames: [],
+        type: "Library",
+        difficulty: "Light",
+        room: "Library"
+      }, p, time);
+    }
   }
 
-  // 5. Default Seminar for Afternoon Periods (P5, P6, P7)
-  if (p >= 5) {
-    return buildOccupiedSlotObject({
-      subjectCode: "SEM",
-      subjectName: "Seminar / Technical Presentation",
-      shortName: "SEM",
-      facultyNames: [],
-      type: "Seminar",
-      difficulty: "Light",
-      room: "Seminar Hall"
-    }, p, time);
+  // 4. Class Advisor Mentoring Hour (Once a week per section)
+  if (classAdvisor && classAdvisor !== "-" && p >= 5) {
+    if (isFacultyFreeFn(classAdvisor, day, p)) {
+      if (typeof markFacultyBusyFn === "function") {
+        markFacultyBusyFn(classAdvisor, day, p, ck);
+      }
+      return buildOccupiedSlotObject({
+        subjectCode: "MENTOR",
+        subjectName: "Mentoring & Counseling Hour",
+        shortName: "MENTOR",
+        facultyNames: [classAdvisor],
+        facultyName: classAdvisor,
+        type: "Mentoring",
+        difficulty: "Light",
+        room: "Classroom"
+      }, p, time);
+    }
   }
 
-  // 6. Class Advisor Mentoring / Counseling
-  const advisorName = String(classAdvisor || "").trim();
-  return buildOccupiedSlotObject({
-    subjectCode: "LIB",
-    subjectName: "Library / Digital Library & Mentoring",
-    shortName: "LIB",
-    facultyNames: (advisorName && advisorName !== "-") ? [advisorName] : [],
-    facultyName: (advisorName && advisorName !== "-") ? advisorName : "-",
-    type: "Library",
-    difficulty: "Light",
-    room: "Library"
-  }, p, time);
+  // 5. Clean Free Slot - Keep free so neither faculty nor student is overloaded!
+  return makeFreeSlot(p, time);
+};
 };
 
 // CASCADE helper: automatically updates allocations, schedule slots, and faculty routines everywhere
@@ -1296,63 +1300,63 @@ const STEP_C_TIERS = [
     enforceSeniorAdminP2: true,
     enforceP7NotTough: true,
     allowAdjacentSameSubj: false,
-    maxSameSubjPerDay: 2,
+    maxSameSubjPerDay: 1,
     allowLibSemP1: false
   },
   {
     name: "relaxFatigue",
     respectFacWeeklyCap: true,
     allowAdjacentFac: true,
-    maxDailyFacTheory: 5,
-    maxDailyFacWithLab: 6,
+    maxDailyFacTheory: 4,
+    maxDailyFacWithLab: 5,
     enforceP1CoreTheory: true,
     enforceSeniorAdminP1: true,
     enforceSeniorAdminP2: true,
     enforceP7NotTough: true,
     allowAdjacentSameSubj: false,
-    maxSameSubjPerDay: 2,
+    maxSameSubjPerDay: 1,
     allowLibSemP1: false
   },
   {
     name: "relaxDailyCap",
-    respectFacWeeklyCap: false,
+    respectFacWeeklyCap: true,
     allowAdjacentFac: true,
-    maxDailyFacTheory: 7,
-    maxDailyFacWithLab: 7,
+    maxDailyFacTheory: 5,
+    maxDailyFacWithLab: 5,
     enforceP1CoreTheory: true,
     enforceSeniorAdminP1: true,
     enforceSeniorAdminP2: true,
     enforceP7NotTough: true,
     allowAdjacentSameSubj: false,
-    maxSameSubjPerDay: 2,
+    maxSameSubjPerDay: 1,
     allowLibSemP1: false
   },
   {
     name: "relaxSoftPeriods",
-    respectFacWeeklyCap: false,
+    respectFacWeeklyCap: true,
     allowAdjacentFac: true,
-    maxDailyFacTheory: 7,
-    maxDailyFacWithLab: 7,
+    maxDailyFacTheory: 5,
+    maxDailyFacWithLab: 5,
     enforceP1CoreTheory: false,
     enforceSeniorAdminP1: true,
     enforceSeniorAdminP2: false,
     enforceP7NotTough: false,
     allowAdjacentSameSubj: false,
-    maxSameSubjPerDay: 2,
+    maxSameSubjPerDay: 1,
     allowLibSemP1: false
   },
   {
     name: "emergencyZeroFree",
-    respectFacWeeklyCap: false,
+    respectFacWeeklyCap: true,
     allowAdjacentFac: true,
-    maxDailyFacTheory: 7,
-    maxDailyFacWithLab: 7,
+    maxDailyFacTheory: 5,
+    maxDailyFacWithLab: 6,
     enforceP1CoreTheory: false,
     enforceSeniorAdminP1: false,
     enforceSeniorAdminP2: false,
     enforceP7NotTough: false,
-    allowAdjacentSameSubj: true,
-    maxSameSubjPerDay: 3,
+    allowAdjacentSameSubj: false,
+    maxSameSubjPerDay: 1,
     allowLibSemP1: true
   }
 ];
@@ -1782,7 +1786,8 @@ const createGridSolver = ({ classGrid, classKeys, classGroups, facultyMaxWorkloa
     }
 
     const timesToday = PERIODS.filter(pr => pr !== p && classGrid[ck][day][pr] && isSameSubjectSlot(classGrid[ck][day][pr], item)).length;
-    const maxToday = isLibOrSem ? 1 : (tier.maxSameSubjPerDay || 2);
+    const isBlockSubj = isContinuousBlockSubject(item);
+    const maxToday = isLibOrSem ? 1 : (isBlockSubj ? 2 : (tier.maxSameSubjPerDay ?? 1));
     if (timesToday >= maxToday) return false;
 
     return true;
@@ -2955,7 +2960,10 @@ router.post("/generate", async (req, res) => {
             clsAllocations,
             (fac, d, pr) => isFacultyFree(fac, d, pr),
             (fac, d, pr, cKey) => markFacultyBusy(fac, d, pr, cKey),
-            classAdvisor
+            classAdvisor,
+            (alloc) => getPlacedCountInClass(ck, alloc),
+            (fac) => canFacultyTakeMoreHours(fac),
+            (alloc, d) => PERIODS.some(pr => classGrid[ck][d][pr] && isSameSubjectSlot(classGrid[ck][d][pr], alloc))
           );
         });
       });
@@ -3241,7 +3249,73 @@ const sanitizeExcessSubjectHours = async (schedule, department) => {
   schedule.classes.forEach(cls => {
     const classAllocs = allAllocations.filter(a => matchesClassAllocation(a, cls));
 
-    // 1. Prune every allocated subject strictly down to its configured hoursPerWeek
+    // 1. PRUNE DUPLICATE LAB / TRAINING BLOCKS (Each continuous lab/training subject can only occur on 1 day per week!)
+    const multiAllocs = classAllocs.filter(a => isContinuousBlockSubject(a) && getAllocHours(a) >= 2);
+    multiAllocs.forEach(allocItem => {
+      const placedDays = [];
+      DAYS.forEach(day => {
+        const dayArr = cls.days?.[day] || [];
+        const slotsOnDay = dayArr.filter(s => s && isSameSubjectSlot(s, allocItem));
+        if (slotsOnDay.length > 0) {
+          placedDays.push({ day, slots: slotsOnDay, hasPinned: slotsOnDay.some(s => s.isPinned) });
+        }
+      });
+
+      const maxBlocksAllowed = allocItem.parsedPattern?.blocks?.length || 1;
+      if (placedDays.length > maxBlocksAllowed) {
+        placedDays.sort((d1, d2) => {
+          if (d1.hasPinned !== d2.hasPinned) return d2.hasPinned ? 1 : -1;
+          return d2.slots.length - d1.slots.length;
+        });
+
+        const excessDays = placedDays.slice(maxBlocksAllowed);
+        excessDays.forEach(ed => {
+          const dayArr = cls.days?.[ed.day] || [];
+          ed.slots.forEach(s => {
+            if (!s.isPinned) {
+              const sIdx = dayArr.findIndex(x => x.period === s.period);
+              if (sIdx !== -1) {
+                dayArr[sIdx] = makeFreeSlot(s.period, s.time);
+                modified = true;
+              }
+            }
+          });
+        });
+      }
+    });
+
+    // 2. PRUNE SAME-DAY DUPLICATE THEORY PERIODS (Strict max 1 period per day for regular theory subjects!)
+    DAYS.forEach(day => {
+      const dayArr = cls.days?.[day] || [];
+      const seenTheory = {};
+      dayArr.forEach((slot, sIdx) => {
+        if (!slot || slot.type === "Free" || slot.subjectCode === "FREE" || slot.isPinned) return;
+        if (isPhysicalLab(slot) || isLabLikeBlock(slot) || slot.isTraining || isContinuousBlockSubject(slot)) return;
+
+        const code = (slot.subjectCode || slot.shortName || "").toUpperCase();
+        if (!code || code === "LIB" || code === "SEM" || code === "MENTOR") return;
+
+        const matchedAlloc = classAllocs.find(a => isSameSubjectSlot(slot, a));
+        const maxDaily = (matchedAlloc && isContinuousBlockSubject(matchedAlloc)) ? 2 : 1;
+
+        if (!seenTheory[code]) seenTheory[code] = [];
+        seenTheory[code].push({ sIdx, slot });
+      });
+
+      Object.entries(seenTheory).forEach(([code, occurrences]) => {
+        const matchedAlloc = classAllocs.find(a => isSameSubjectSlot(occurrences[0].slot, a));
+        const maxDaily = (matchedAlloc && isContinuousBlockSubject(matchedAlloc)) ? 2 : 1;
+        if (occurrences.length > maxDaily) {
+          for (let i = maxDaily; i < occurrences.length; i++) {
+            const { sIdx, slot } = occurrences[i];
+            dayArr[sIdx] = makeFreeSlot(slot.period, slot.time);
+            modified = true;
+          }
+        }
+      });
+    });
+
+    // 3. Prune every allocated subject strictly down to its configured hoursPerWeek
     classAllocs.forEach(allocItem => {
       const subjCode = allocItem.subjectCode || allocItem.code || allocItem.shortName;
       if (!subjCode || subjCode === "FREE" || subjCode === "MENTOR") return;
@@ -3275,7 +3349,26 @@ const sanitizeExcessSubjectHours = async (schedule, department) => {
       }
     });
 
-    // 2. Enforce global Library & Seminar weekly cap (even if unallocated or stale from prior schedule)
+    // 4. Prune unallocated / stale subjects that do not belong to this class
+    if (allAllocations.length > 0) {
+      DAYS.forEach(day => {
+        const dayArr = cls.days?.[day] || [];
+        dayArr.forEach((slot, sIdx) => {
+          if (!slot || slot.type === "Free" || slot.subjectCode === "FREE" || slot.isPinned) return;
+          const sc = (slot.subjectCode || "").toUpperCase();
+          const sn = (slot.shortName || "").toUpperCase();
+          if (sc === "LIB" || sn === "LIB" || sc === "SEM" || sn === "SEM" || sc === "MENTOR" || sn === "MENTOR") return;
+
+          const hasAlloc = classAllocs.some(a => isSameSubjectSlot(slot, a));
+          if (!hasAlloc) {
+            dayArr[sIdx] = makeFreeSlot(slot.period, slot.time);
+            modified = true;
+          }
+        });
+      });
+    }
+
+    // 5. Enforce global Library & Seminar weekly cap (even if unallocated or stale from prior schedule)
     const pruneSpecialExcess = (predicate, expectedMax) => {
       const matched = [];
       DAYS.forEach(day => {
@@ -3303,13 +3396,13 @@ const sanitizeExcessSubjectHours = async (schedule, department) => {
     };
 
     if (allAllocations.length > 0) {
-      const expectedLib = classAllocs.filter(isLibraryItem).reduce((s, a) => s + getAllocHours(a), 0);
-      const expectedSem = classAllocs.filter(isSeminarItem).reduce((s, a) => s + getAllocHours(a), 0);
+      const expectedLib = classAllocs.filter(isLibraryItem).reduce((s, a) => s + getAllocHours(a), 0) || 1;
+      const expectedSem = classAllocs.filter(isSeminarItem).reduce((s, a) => s + getAllocHours(a), 0) || 1;
       pruneSpecialExcess(isLibraryItem, expectedLib);
       pruneSpecialExcess(isSeminarItem, expectedSem);
     }
 
-    // 3. Prune duplicate non-faculty filler slots on the same day ONLY if unallocated OR exceeding allocated weekly hours
+    // 6. Prune duplicate non-faculty filler slots on the same day ONLY if unallocated OR exceeding allocated weekly hours
     DAYS.forEach(day => {
       const dayArr = cls.days?.[day] || [];
       const seenElectives = {};
@@ -3726,7 +3819,19 @@ const healScheduleFreeSlots = async (schedule, department) => {
             clsAllocs,
             (fac, d, pr) => !hasFacBusy(fac, d, pr),
             (fac, d, pr) => addFacBusy(fac, d, pr),
-            allocDoc?.classAdvisors?.[ck] || ""
+            allocDoc?.classAdvisors?.[ck] || "",
+            (alloc) => {
+              let count = 0;
+              DAYS.forEach(d => {
+                PERIODS.forEach(pr => {
+                  const s = classGrid[ck]?.[d]?.[pr];
+                  if (s && isSameSubjectSlot(s, alloc)) count++;
+                });
+              });
+              return count;
+            },
+            (fac) => true,
+            (alloc, d) => PERIODS.some(pr => classGrid[ck]?.[d]?.[pr] && isSameSubjectSlot(classGrid[ck][d][pr], alloc))
           );
           classGrid[ck][day][p] = newSlot;
         }
@@ -3747,15 +3852,14 @@ const healScheduleFreeSlots = async (schedule, department) => {
   return modified;
 };
 
-// GET saved timetable schedule (automatically heals & fills FREE slots, and prunes any excess hours)
+// GET saved timetable schedule (automatically prunes any excess hours and rebuilds faculty schedules)
 router.get("/schedule", async (req, res) => {
   try {
     const { department = "CSE", academicYear = "2026-2027", semesterType = "Odd" } = req.query;
     let schedule = await findScheduleWithFallback(department, academicYear, semesterType);
     if (schedule && !schedule.isLocked) {
       const sanitized = await sanitizeExcessSubjectHours(schedule, department);
-      const healed = await healScheduleFreeSlots(schedule, department);
-      if (sanitized || healed) {
+      if (sanitized) {
         schedule.facultySchedules = await buildFacultySchedules(schedule, department);
         schedule.markModified("classes");
         schedule.markModified("facultySchedules");
