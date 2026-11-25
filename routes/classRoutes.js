@@ -66,7 +66,15 @@ const recalculateClassStudents = (cls, rawStudents) => {
         if (strVal === "AB" || strVal === "A") {
           fail = true;
         } else {
-          const numVal = Number(strVal || 0);
+          let numVal = Number(strVal || 0);
+          if (cls.markPerSubject && numVal > cls.markPerSubject) {
+            numVal = cls.markPerSubject; // Strict cap: never exceed maximum mark
+            marks[idx] = String(cls.markPerSubject);
+          }
+          if (numVal < 0) {
+            numVal = 0;
+            marks[idx] = "0";
+          }
           total += (isNaN(numVal) ? 0 : numVal);
           if (numVal < cls.passMark) fail = true;
         }
@@ -899,12 +907,24 @@ router.post("/sync-student-mark", async (req, res) => {
     const marks = Array.isArray(student.marks) ? [...student.marks] : [];
     while (marks.length < count) marks.push("");
 
-    const newMarkStr = String(mark !== undefined && mark !== null ? mark : "").trim();
+    let newMarkStr = String(mark !== undefined && mark !== null ? mark : "").trim();
+    const isESE = targetClass.examName === "ESE";
+    const maxMark = Number(targetClass.markPerSubject);
+
+    if (!isESE && newMarkStr !== "" && newMarkStr.toUpperCase() !== "AB" && newMarkStr.toUpperCase() !== "A") {
+      const numVal = Number(newMarkStr);
+      if (isNaN(numVal) || numVal < 0) {
+        return res.status(400).json({ error: `Invalid mark "${newMarkStr}". Mark must be a valid non-negative number, A, or AB.` });
+      }
+      if (maxMark && numVal > maxMark) {
+        return res.status(400).json({ error: `Mark ${numVal} exceeds maximum allowed mark of ${maxMark} for ${targetClass.examName || "this exam"}!` });
+      }
+    }
+
     marks[subjIdx] = newMarkStr;
     student.marks = marks;
 
     // 5. Recalculate student total, percentage, result
-    const isESE = targetClass.examName === "ESE";
     let total = 0;
     let totalGradePoints = 0;
     let totalCredits = 0;
@@ -1066,11 +1086,23 @@ router.post("/sync-batch-marks", async (req, res) => {
       const marks = Array.isArray(student.marks) ? [...student.marks] : [];
       while (marks.length < count) marks.push("");
 
-      const newMarkStr = String(mark !== undefined && mark !== null ? mark : "").trim();
+      let newMarkStr = String(mark !== undefined && mark !== null ? mark : "").trim();
+      const isESE = targetClass.examName === "ESE";
+      const maxMark = Number(targetClass.markPerSubject);
+
+      if (!isESE && newMarkStr !== "" && newMarkStr.toUpperCase() !== "AB" && newMarkStr.toUpperCase() !== "A") {
+        const numVal = Number(newMarkStr);
+        if (isNaN(numVal) || numVal < 0) {
+          continue;
+        }
+        if (maxMark && numVal > maxMark) {
+          newMarkStr = String(maxMark); // Cap strictly to maximum mark
+        }
+      }
+
       marks[subjIdx] = newMarkStr;
       student.marks = marks;
 
-      const isESE = targetClass.examName === "ESE";
       let total = 0;
       let totalGradePoints = 0;
       let totalCredits = 0;
