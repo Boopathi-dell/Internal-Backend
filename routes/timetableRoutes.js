@@ -1,7 +1,6 @@
 const express = require("express");
 const router = express.Router();
 const Staff = require("../models/Staff");
-const User = require("../models/User");
 const SubjectMaster = require("../models/SubjectMaster");
 const TimetableAllocation = require("../models/TimetableAllocation");
 const TimetableSchedule = require("../models/TimetableSchedule");
@@ -501,7 +500,6 @@ const fillRemainingEmptySlot = (
   // 5. Clean Free Slot - Keep free so neither faculty nor student is overloaded!
   return makeFreeSlot(p, time);
 };
-};
 
 // CASCADE helper: automatically updates allocations, schedule slots, and faculty routines everywhere
 async function cascadeFacultyNameChange(oldName, newName, department = "CSE") {
@@ -511,11 +509,11 @@ async function cascadeFacultyNameChange(oldName, newName, department = "CSE") {
 
   const deptUpper = (department || "CSE").toUpperCase();
 
-  // 1. Delete any other duplicate staff records in Staff collection matching oldName
+  // 1. Delete any other exact duplicate staff records matching oldName (case-insensitive)
   try {
     const allStaff = await Staff.find({ department: deptUpper });
     for (const s of allStaff) {
-      if (s.name !== newName && isSameFacultyName(s.name, oldName)) {
+      if (s.name !== newName && s.name && s.name.trim().toLowerCase() === oldName.trim().toLowerCase()) {
         await Staff.findByIdAndDelete(s._id);
       }
     }
@@ -696,9 +694,9 @@ router.post("/staff", async (req, res) => {
     const cleanName = name.trim();
     const deptUpper = (department || "CSE").toUpperCase();
 
-    // Check if an existing staff matches fuzzy name across staff collection
-    const allStaff = await Staff.find({});
-    const existing = allStaff.find(s => isSameFacultyName(s.name, cleanName));
+    // Check if an existing staff matches exact name (case-insensitive) in this department
+    const allStaff = await Staff.find({ department: deptUpper });
+    const existing = allStaff.find(s => s.name && s.name.trim().toLowerCase() === cleanName.toLowerCase());
 
     if (existing) {
       // Merge & Update instead of creating duplicate!
@@ -939,11 +937,11 @@ async function unassignFacultyEverywhere(facultyName, department = "CSE") {
   if (!facultyName) return { allocations: null, classes: null, facultySchedules: null };
   const deptUpper = (department || "CSE").toUpperCase();
 
-  // 1. Delete from Staff collection (any records matching this name across departments)
+  // 1. Delete from Staff collection (only exact match to this faculty name, case-insensitive)
   try {
     const allStaff = await Staff.find({});
     for (const s of allStaff) {
-      if (isSameFacultyName(s.name, facultyName)) {
+      if (s.name && s.name.trim().toLowerCase() === facultyName.trim().toLowerCase()) {
         await Staff.findByIdAndDelete(s._id);
       }
     }
@@ -1123,35 +1121,15 @@ router.post("/staff/unassign-name", async (req, res) => {
   }
 });
 
-// SYNC staff from ALL Users in User collection (including Teaching Assistants)
+// SYNC staff from Users is DISABLED per user requirement:
+// Faculty Master List is the single source of truth managed directly in Timetable.
 router.post("/staff/sync-users", async (req, res) => {
   try {
-    const users = await User.find({});
-    let addedCount = 0;
-    for (const u of users) {
-      if (!u.name || !u.name.trim()) continue;
-      const cleanName = u.name.trim();
-      const existing = await Staff.findOne({
-        name: { $regex: new RegExp(`^${cleanName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") }
-      });
-      if (!existing) {
-        await Staff.create({
-          name: cleanName,
-          email: u.email || "",
-          department: (u.department || "CSE").toUpperCase(),
-          designation: u.designation || "Teaching Assistant",
-          maxHoursPerWeek: 18,
-          maxTheory: 2,
-          maxLab: 2
-        });
-        addedCount++;
-      }
-    }
     const allStaff = await Staff.find().sort({ name: 1 });
     res.json({
-      message: `Synced ${addedCount} faculty members from Users! (Total: ${allStaff.length})`,
+      message: "Sync from Users is disabled. Faculty Master List is managed directly.",
       staff: allStaff,
-      totalSynced: addedCount
+      totalSynced: 0
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
